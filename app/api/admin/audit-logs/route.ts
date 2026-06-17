@@ -1,8 +1,21 @@
 import { NextRequest } from "next/server";
-import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
+
+type AuditLogRow = {
+  id: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  actorUserId: string | null;
+  tenantId: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  oldValue: unknown | null;
+  newValue: unknown | null;
+  createdAt: Date;
+};
 
 const auditLogSelect = {
   id: true,
@@ -15,40 +28,25 @@ const auditLogSelect = {
   userAgent: true,
   oldValue: true,
   newValue: true,
-  createdAt: true,
-  actor: {
-    select: {
-      name: true,
-      email: true
-    }
-  },
-  tenant: {
-    select: {
-      name: true
-    }
-  }
-} satisfies Prisma.AuditLogSelect;
-
-type AuditLogRow = Prisma.AuditLogGetPayload<{ select: typeof auditLogSelect }>;
+  createdAt: true
+} as const;
 
 export async function GET(request: NextRequest) {
   try {
     await requirePlatformAdmin(request);
-    const logs: AuditLogRow[] = await prisma.auditLog.findMany({
+    const logs = await prisma.auditLog.findMany({
       orderBy: { createdAt: "desc" },
       take: 100,
       select: auditLogSelect
     });
     return json({
-      logs: logs.map((log: AuditLogRow) => ({
+      logs: (logs as AuditLogRow[]).map((log) => ({
         id: log.id,
         action: log.action,
-        entityType: log.entityType || "UNKNOWN",
+        entityType: log.entityType ?? "UNKNOWN",
         entityId: log.entityId,
         actorUserId: log.actorUserId,
         tenantId: log.tenantId,
-        company: log.tenant?.name ?? null,
-        actor: log.actor?.name ?? log.actor?.email ?? "System",
         ipAddress: log.ipAddress,
         userAgent: log.userAgent,
         oldValue: log.oldValue,
