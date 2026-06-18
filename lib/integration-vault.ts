@@ -72,13 +72,82 @@ export function isMaskedPlaceholder(value: string) {
   return /^\*{4,}.{0,16}$/.test(trimmed) || /^saved securely/i.test(trimmed);
 }
 
+function unquoteCredentialValue(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return trimmed;
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === "string") {
+      return parsed;
+    }
+  } catch {
+    // Fall back to manual quote stripping below.
+  }
+
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  if ((first === `"` && last === `"`) || (first === "'" && last === "'")) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+}
+
 function normalizePrivateKey(value: string) {
-  return value.trim().replace(/\\n/g, "\n");
+  return unquoteCredentialValue(value)
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+}
+
+function parseServiceAccountJson(value: string) {
+  const candidates = [value.trim(), unquoteCredentialValue(value)];
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const serviceAccount = parsed as { private_key?: unknown; client_email?: unknown };
+      const privateKey =
+        typeof serviceAccount.private_key === "string"
+          ? normalizePrivateKey(serviceAccount.private_key)
+          : undefined;
+      const clientEmail =
+        typeof serviceAccount.client_email === "string"
+          ? serviceAccount.client_email.trim()
+          : undefined;
+
+      if (privateKey || clientEmail) {
+        return { privateKey, clientEmail };
+      }
+    } catch {
+      // Not a service-account JSON object.
+    }
+  }
+
+  return null;
+}
+
+function googleServiceAccountFromSubmittedConfig(config?: Record<string, unknown>) {
+  for (const value of Object.values(config ?? {})) {
+    if (typeof value !== "string") continue;
+    const parsed = parseServiceAccountJson(value);
+    if (parsed?.privateKey || parsed?.clientEmail) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 export function normalizeSubmittedConfig(type: IntegrationType, config?: Record<string, unknown>): IntegrationConfig {
   const allowed = new Set(integrationFields(type).map((field) => field.name));
   const normalized: IntegrationConfig = {};
+  const googleServiceAccount = type === "GOOGLE_SHEETS" ? googleServiceAccountFromSubmittedConfig(config) : null;
 
   for (const [key, value] of Object.entries(config ?? {})) {
     if (!allowed.has(key)) continue;
@@ -88,6 +157,15 @@ export function normalizeSubmittedConfig(type: IntegrationType, config?: Record<
     if (!trimmed) continue;
     if (isSensitiveField(type, key) && isMaskedPlaceholder(trimmed)) continue;
     normalized[key] = key.includes("PRIVATE_KEY") ? normalizePrivateKey(stringValue) : trimmed;
+  }
+
+  if (type === "GOOGLE_SHEETS") {
+    if (googleServiceAccount?.privateKey) {
+      normalized.GOOGLE_PRIVATE_KEY = googleServiceAccount.privateKey;
+    }
+    if (googleServiceAccount?.clientEmail && !normalized.GOOGLE_SERVICE_ACCOUNT_EMAIL) {
+      normalized.GOOGLE_SERVICE_ACCOUNT_EMAIL = googleServiceAccount.clientEmail;
+    }
   }
 
   if (type === "META_ADS" && normalized.META_AD_ACCOUNT_ID) {
@@ -213,7 +291,7 @@ async function verifyGoogleSheets(config: IntegrationConfig) {
   }
   if (
     !config.GOOGLE_PRIVATE_KEY.startsWith("-----BEGIN PRIVATE KEY-----") ||
-    !config.GOOGLE_PRIVATE_KEY.endsWith("-----END PRIVATE KEY-----")
+    !config.GOOGLE_PRIVATE_KEY.includes("-----END PRIVATE KEY-----")
   ) {
     return failure("GOOGLE_PRIVATE_KEY wrong");
   }
