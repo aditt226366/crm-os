@@ -31,6 +31,7 @@ Set real values in `.env`, especially:
 
 ```bash
 DATABASE_URL=
+DIRECT_URL=
 JWT_ACCESS_SECRET=
 JWT_REFRESH_SECRET=
 ENCRYPTION_KEY=
@@ -39,6 +40,8 @@ PLATFORM_ADMIN_PASSWORD=
 APP_URL=
 CORS_ORIGIN=
 ```
+
+If using Supabase, `DATABASE_URL` can be the pooled/runtime URL, but `DIRECT_URL` must be the direct Supabase DB URL from Supabase -> Connect -> Direct connection. If direct connection is unreachable from the host, use the Supabase session pooler as a fallback, not the transaction pooler.
 
 Then initialize Prisma:
 
