@@ -65,7 +65,7 @@ export function LoginForm({
       <input
         value={username}
         onChange={(event) => setUsername(event.target.value)}
-        placeholder="Username"
+        placeholder="Email or username"
         className="h-12 w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/50 focus:bg-cyan-300/[0.06]"
       />
       <PasswordInput value={password} onChange={setPassword} />

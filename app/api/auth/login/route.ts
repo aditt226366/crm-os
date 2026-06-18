@@ -12,7 +12,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        message: "Server configuration error."
+        message: "Server configuration error.",
+        error: {
+          code: "AUTH_ENV_MISSING",
+          message: "Server configuration error."
+        }
       },
       { status: 500 }
     );

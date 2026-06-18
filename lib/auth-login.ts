@@ -1,13 +1,53 @@
 import type { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { prisma } from "@/lib/prisma";
+import { validateAuthEnv } from "@/lib/auth-env";
 import { loginSchema } from "@/lib/validation";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { createSession, setAuthCookies } from "@/lib/auth";
+import { createAccessOnlySession, createSession, setAuthCookies } from "@/lib/auth";
 import { ApiError, json } from "@/lib/api";
 import { clientIp, sanitizeText, verifyPassword } from "@/lib/security";
 import { safeCreateAuditLog } from "@/lib/audit";
+
+type LoginUser = NonNullable<Awaited<ReturnType<typeof findLoginUser>>>;
+
+function prismaDebug(error: unknown) {
+  const details = error as { code?: unknown; meta?: unknown; message?: unknown };
+  return {
+    prismaCode:
+      error instanceof Prisma.PrismaClientKnownRequestError
+        ? error.code
+        : typeof details.code === "string"
+          ? details.code
+          : undefined,
+    prismaMeta: error instanceof Prisma.PrismaClientKnownRequestError ? error.meta : undefined,
+    prismaMessage: typeof details.message === "string" ? details.message : String(error)
+  };
+}
+
+function isPrismaError(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    error instanceof Prisma.PrismaClientInitializationError ||
+    error instanceof Prisma.PrismaClientUnknownRequestError ||
+    error instanceof Prisma.PrismaClientRustPanicError
+  );
+}
+
+function databaseFailureBody(error: unknown) {
+  const debug = prismaDebug(error);
+  return {
+    ok: false,
+    message: debug.prismaCode ? `Database request failed: ${debug.prismaCode}` : "Database request failed.",
+    error: {
+      code: "DATABASE_REQUEST_FAILED",
+      message: debug.prismaCode ? `Database request failed: ${debug.prismaCode}` : "Database request failed."
+    },
+    ...(process.env.NODE_ENV !== "production" ? { debug } : {})
+  };
+}
 
 function safeLoginErrorResponse(error: unknown) {
   if (error instanceof ApiError) {
@@ -46,13 +86,17 @@ function safeLoginErrorResponse(error: unknown) {
     );
   }
 
+  if (isPrismaError(error)) {
+    return json(databaseFailureBody(error), { status: 500 });
+  }
+
   return json(
     {
       ok: false,
-      message: "Something went wrong",
+      message: "Login failed because the server hit an unexpected error.",
       error: {
         code: "INTERNAL_ERROR",
-        message: "Something went wrong"
+        message: "Login failed because the server hit an unexpected error."
       }
     },
     { status: 500 }
@@ -60,14 +104,86 @@ function safeLoginErrorResponse(error: unknown) {
 }
 
 function logLoginFailure(error: unknown) {
+  const debug = isPrismaError(error) ? prismaDebug(error) : null;
   console.error("[auth.login] failed", {
     name: error instanceof Error ? error.name : "UnknownError",
-    message: error instanceof Error ? error.message : "Unknown login error"
+    message: error instanceof Error ? error.message : "Unknown login error",
+    prismaCode: debug?.prismaCode,
+    prismaMeta: debug?.prismaMeta
   });
+}
+
+async function findLoginUser(username: string) {
+  return prisma.user.findFirst({
+    where: {
+      OR: [
+        { email: { equals: username, mode: "insensitive" } },
+        { username: { equals: username, mode: "insensitive" } }
+      ]
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      username: true,
+      passwordHash: true,
+      role: true,
+      status: true,
+      tenantId: true,
+      tenant: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          plan: true,
+          status: true
+        }
+      }
+    }
+  });
+}
+
+async function safeUpdateLastLogin(userId: string) {
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: new Date() }
+    });
+  } catch (error) {
+    console.error("[auth.login] lastLoginAt update failed", prismaDebug(error));
+  }
+}
+
+async function createLoginSession(user: LoginUser) {
+  try {
+    return await createSession(user);
+  } catch (error) {
+    if (!isPrismaError(error)) {
+      throw error;
+    }
+
+    console.error("[auth.login] refresh token creation failed; issuing access-only session", prismaDebug(error));
+    return createAccessOnlySession(user);
+  }
 }
 
 export async function loginWithRequest(request: NextRequest) {
   try {
+    const authEnv = validateAuthEnv();
+    if (!authEnv.ok) {
+      return json(
+        {
+          ok: false,
+          message: "Server configuration error.",
+          error: {
+            code: "AUTH_ENV_MISSING",
+            message: "Server configuration error."
+          }
+        },
+        { status: 500 }
+      );
+    }
+
     console.log("[auth.login] request received");
 
     const ip = clientIp(request.headers);
@@ -85,15 +201,7 @@ export async function loginWithRequest(request: NextRequest) {
 
     const body = loginSchema.parse(requestBody);
     const username = sanitizeText(body.username).toLowerCase();
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { email: { equals: username, mode: "insensitive" } },
-          { username: { equals: username, mode: "insensitive" } }
-        ]
-      },
-      include: { tenant: true }
-    });
+    const user = await findLoginUser(username);
 
     console.log("[auth.login] user lookup", {
       username,
@@ -125,10 +233,7 @@ export async function loginWithRequest(request: NextRequest) {
       throw new ApiError(403, "UNSUPPORTED_ROLE", "This account cannot sign in here.");
     }
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() }
-    });
+    await safeUpdateLastLogin(user.id);
 
     await safeCreateAuditLog({
       request,
@@ -163,7 +268,7 @@ export async function loginWithRequest(request: NextRequest) {
       redirectTo
     });
 
-    setAuthCookies(response, await createSession(user));
+    setAuthCookies(response, await createLoginSession(user));
     console.log("[auth.login] success", {
       userId: user.id,
       username,

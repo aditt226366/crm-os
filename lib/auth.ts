@@ -96,9 +96,26 @@ export async function createSession(user: {
   return { accessToken, refreshToken };
 }
 
+export async function createAccessOnlySession(user: {
+  id: string;
+  role: string;
+  tenantId: string | null;
+  username?: string | null;
+}) {
+  const accessToken = await signAccessToken({
+    sub: user.id,
+    userId: user.id,
+    role: user.role,
+    tenantId: user.tenantId,
+    username: user.username ?? null
+  });
+
+  return { accessToken, refreshToken: null };
+}
+
 export function setAuthCookies(
   response: NextResponse,
-  tokens: { accessToken: string; refreshToken: string }
+  tokens: { accessToken: string; refreshToken?: string | null }
 ) {
   const secure = process.env.NODE_ENV === "production";
   response.cookies.set(accessCookie, tokens.accessToken, {
@@ -108,13 +125,17 @@ export function setAuthCookies(
     path: "/",
     maxAge: 60 * 15
   });
-  response.cookies.set(refreshCookie, tokens.refreshToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30
-  });
+  if (tokens.refreshToken) {
+    response.cookies.set(refreshCookie, tokens.refreshToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure,
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30
+    });
+  } else {
+    response.cookies.set(refreshCookie, "", { path: "/", maxAge: 0 });
+  }
   response.cookies.set(legacyAccessCookie, "", { path: "/", maxAge: 0 });
   response.cookies.set(legacyRefreshCookie, "", { path: "/", maxAge: 0 });
 }
