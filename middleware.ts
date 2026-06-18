@@ -4,6 +4,16 @@ import { jwtVerify } from "jose";
 const protectedAdmin = /^\/admin(?:\/|$)/;
 const protectedApp = /^\/app(?:\/|$)/;
 const accessCookie = "crm_access_token";
+const publicPaths = ["/", "/login", "/api/health", "/health"];
+
+function isPublicPath(path: string) {
+  return publicPaths.some((publicPath) => {
+    if (publicPath === "/") {
+      return path === "/";
+    }
+    return path === publicPath || path.startsWith(`${publicPath}/`);
+  });
+}
 
 function securityHeaders(response: NextResponse) {
   response.headers.set("X-Content-Type-Options", "nosniff");
@@ -56,6 +66,10 @@ export async function middleware(request: NextRequest) {
   }
 
   const path = request.nextUrl.pathname;
+  if (isPublicPath(path)) {
+    return corsHeaders(request, securityHeaders(NextResponse.next()));
+  }
+
   const role = await readRole(request);
 
   if (protectedAdmin.test(path) && role !== "PLATFORM_ADMIN") {
@@ -86,5 +100,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]
+  matcher: ["/((?!api/health|health|_next/static|_next/image|favicon.ico).*)"]
 };
