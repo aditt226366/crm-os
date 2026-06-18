@@ -9,6 +9,7 @@ import { writeAuditLog } from "@/lib/audit";
 import { serializeIntegration } from "@/lib/serializers";
 import { encryptJson, scrubSecretsFromLogs } from "@/lib/security";
 import { maskedDisplayForConfig, webhookUrlForTenant, type IntegrationConfig } from "@/lib/integration-vault";
+import { validateMetaEmbeddedSignupEnv } from "@/lib/integration-env";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -69,7 +70,12 @@ function webhookVerifyToken() {
 }
 
 async function exchangeCodeForAccessToken(code: string) {
-  const appId = process.env.META_APP_ID?.trim() || process.env.NEXT_PUBLIC_META_APP_ID?.trim();
+  const integrationEnv = validateMetaEmbeddedSignupEnv();
+  if (!integrationEnv.ok) {
+    throw new ApiError(500, "META_CONFIGURATION_MISSING", "Meta Embedded Signup is not configured on the server.");
+  }
+
+  const appId = process.env.NEXT_PUBLIC_META_APP_ID?.trim();
   const appSecret = process.env.META_APP_SECRET?.trim();
 
   if (!appId || !appSecret) {

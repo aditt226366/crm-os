@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import sanitizeHtml from "sanitize-html";
-import { env } from "@/lib/env";
 
 export async function hashPassword(password: string) {
   return bcrypt.hash(password, 12);
@@ -27,7 +26,10 @@ export function sha256(value: string) {
 }
 
 function encryptionKey() {
-  return crypto.createHash("sha256").update(env.ENCRYPTION_KEY).digest();
+  return crypto
+    .createHash("sha256")
+    .update(process.env.ENCRYPTION_KEY ?? "local-encryption-secret-change-before-production-32")
+    .digest();
 }
 
 export function encryptJson(value: unknown) {

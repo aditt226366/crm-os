@@ -32,6 +32,8 @@ export function LoginForm({
       });
 
       const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        message?: string;
         redirectTo?: string;
         error?: { message?: string };
       } | null;
@@ -40,7 +42,7 @@ export function LoginForm({
         setError(
           response.status === 401
             ? "Invalid username or password."
-            : payload?.error?.message ?? "Login failed. Please try again."
+            : payload?.message ?? payload?.error?.message ?? "Login failed. Please try again."
         );
         return;
       }

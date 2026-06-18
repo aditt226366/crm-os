@@ -2,13 +2,14 @@ import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import type { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { env } from "@/lib/env";
 import { ApiError } from "@/lib/api";
 import { sha256 } from "@/lib/security";
 
 const accessCookie = "crm_access_token";
 const refreshCookie = "crm_refresh_token";
-const accessSecret = new TextEncoder().encode(env.JWT_ACCESS_SECRET);
+const accessSecret = new TextEncoder().encode(
+  process.env.JWT_ACCESS_SECRET ?? "local-access-secret-change-before-production-32"
+);
 
 type AccessPayload = {
   sub: string;
@@ -90,7 +91,7 @@ export function setAuthCookies(
   response: NextResponse,
   tokens: { accessToken: string; refreshToken: string }
 ) {
-  const secure = env.isProduction;
+  const secure = process.env.NODE_ENV === "production";
   response.cookies.set(accessCookie, tokens.accessToken, {
     httpOnly: true,
     sameSite: "lax",

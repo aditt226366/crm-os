@@ -11,11 +11,20 @@ import { writeAuditLog } from "@/lib/audit";
 
 function safeLoginErrorResponse(error: unknown) {
   if (error instanceof ApiError) {
+    const message =
+      error.code === "INVALID_CREDENTIALS"
+        ? "Invalid username or password."
+        : error.code === "TENANT_DEACTIVATED"
+          ? "Company is deactivated. Contact platform admin."
+          : error.message;
+
     return json(
       {
+        ok: false,
+        message,
         error: {
           code: error.code,
-          message: error.message
+          message
         }
       },
       { status: error.status }
@@ -25,6 +34,8 @@ function safeLoginErrorResponse(error: unknown) {
   if (error instanceof ZodError) {
     return json(
       {
+        ok: false,
+        message: "Request validation failed",
         error: {
           code: "VALIDATION_ERROR",
           message: "Request validation failed",
@@ -37,6 +48,8 @@ function safeLoginErrorResponse(error: unknown) {
 
   return json(
     {
+      ok: false,
+      message: "Something went wrong",
       error: {
         code: "INTERNAL_ERROR",
         message: "Something went wrong"
@@ -105,7 +118,7 @@ export async function loginWithRequest(request: NextRequest) {
 
     const isCompanyUser = user.role === "COMPANY_OWNER" || user.role === "COMPANY_AGENT";
     if (isCompanyUser && (!user.tenant || user.tenant.status !== "ACTIVE")) {
-      throw new ApiError(403, "TENANT_DEACTIVATED", "Company deactivated. Contact platform admin.");
+      throw new ApiError(403, "TENANT_DEACTIVATED", "Company is deactivated. Contact platform admin.");
     }
 
     if (user.role !== "PLATFORM_ADMIN" && !isCompanyUser) {
@@ -129,6 +142,7 @@ export async function loginWithRequest(request: NextRequest) {
 
     const redirectTo = user.role === "PLATFORM_ADMIN" ? "/admin" : "/app/dashboard";
     const response = json({
+      ok: true,
       user: {
         id: user.id,
         name: user.name,
