@@ -45,6 +45,36 @@ type IntegrationCompanySummary = {
 };
 
 type FormValues = Partial<Record<IntegrationType, Record<string, string>>>;
+type FieldErrors = Partial<Record<IntegrationType, Record<string, string>>>;
+type IntegrationDebugDetails = {
+  route: string;
+  statusCode: number | null;
+  lastRequestAt: string;
+  message: string;
+  code?: string;
+  field?: string;
+};
+
+type IntegrationApiErrorPayload = {
+  ok?: boolean;
+  message?: string;
+  error?: string | { message?: string; code?: string };
+  details?: Array<{ message?: string }>;
+  code?: string;
+  field?: string;
+};
+
+class IntegrationApiRequestError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number | null,
+    public payload: IntegrationApiErrorPayload | null,
+    public route: string
+  ) {
+    super(message);
+    this.name = "IntegrationApiRequestError";
+  }
+}
 
 const iconMap = {
   sheets: Sheet,
@@ -69,6 +99,50 @@ function displayDate(value: string | null | undefined) {
 
 function integrationByType(integrations: IntegrationRecord[]) {
   return new Map(integrations.map((integration) => [integration.type as IntegrationType, integration]));
+}
+
+function messageFromPayload(data: IntegrationApiErrorPayload | null, fallback: string) {
+  if (!data) return fallback;
+  if (typeof data.message === "string" && data.message.trim()) return data.message;
+  if (typeof data.error === "string" && data.error.trim()) return data.error;
+  if (data.error && typeof data.error === "object" && data.error.message) return data.error.message;
+  if (data.details?.[0]?.message) return data.details[0].message;
+  return fallback;
+}
+
+async function apiRequest<T>(url: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers);
+  if (!headers.has("Content-Type") && options.body) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      credentials: "include",
+      headers
+    });
+  } catch (error) {
+    throw new IntegrationApiRequestError(
+      error instanceof Error ? error.message : "Network request failed",
+      null,
+      null,
+      url
+    );
+  }
+
+  const data = (await response.json().catch(() => null)) as (T & IntegrationApiErrorPayload) | null;
+  if (!response.ok) {
+    throw new IntegrationApiRequestError(
+      messageFromPayload(data, `Request failed with status ${response.status}`),
+      response.status,
+      data,
+      url
+    );
+  }
+
+  return { data: data as T, statusCode: response.status };
 }
 
 export function IntegrationsPage() {
@@ -202,8 +276,10 @@ function CompanyIntegrationDrawer({
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<FormValues>({});
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
+  const [debugDetails, setDebugDetails] = useState<Record<IntegrationType, IntegrationDebugDetails | null>>({} as Record<IntegrationType, IntegrationDebugDetails | null>);
   const companyId = company?.id;
   const integrationMap = useMemo(() => integrationByType(integrations), [integrations]);
 
@@ -211,12 +287,16 @@ function CompanyIntegrationDrawer({
     if (!companyId) return;
     let active = true;
 
-    fetch(`/api/admin/companies/${companyId}/integrations`)
-      .then((response) => response.json())
-      .then((data: { integrations: IntegrationRecord[] }) => {
+    apiRequest<{ integrations: IntegrationRecord[] }>(`/api/admin/companies/${companyId}/integrations`)
+      .then(({ data }) => {
         if (!active) return;
         setIntegrations(data.integrations ?? []);
         setFormValues(buildVisibleDefaults(data.integrations ?? []));
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setToast(error instanceof Error ? error.message : "Integration request failed.");
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -235,6 +315,11 @@ function CompanyIntegrationDrawer({
         [field]: value
       }
     }));
+    setFieldErrors((current) => {
+      const next = { ...(current[type] ?? {}) };
+      delete next[field];
+      return { ...current, [type]: next };
+    });
   }
 
   function applyIntegrationUpdate(integration: IntegrationRecord) {
@@ -263,41 +348,50 @@ function CompanyIntegrationDrawer({
     const key = pendingKey(type, action);
     setPending((current) => ({ ...current, [key]: true }));
     setToast(null);
+    setFieldErrors((current) => ({ ...current, [type]: {} }));
     try {
       const title = INTEGRATION_CATALOG[type].title;
       const config = formValues[type] ?? {};
-      let response: Response;
+      let route = `/api/admin/companies/${company.id}/integrations/${type}`;
+      let requestOptions: RequestInit = {};
 
       if (action === "disconnect") {
         const confirmed = window.confirm(`Disconnect ${title} for ${company.name}?`);
         if (!confirmed) return;
-        response = await fetch(`/api/admin/companies/${company.id}/integrations/${type}/disconnect`, { method: "POST" });
+        route = `${route}/disconnect`;
+        requestOptions = { method: "POST" };
       } else if (action === "test") {
-        response = await fetch(`/api/admin/companies/${company.id}/integrations/${type}/test`, { method: "POST" });
+        route = `${route}/test`;
+        requestOptions = { method: "POST" };
       } else {
-        response = await fetch(
-          `/api/admin/companies/${company.id}/integrations/${type}${action === "verify" ? "/verify" : ""}`,
-          {
-            method: action === "save" ? "PATCH" : "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ config })
-          }
-        );
+        route = `${route}${action === "verify" ? "/verify" : ""}`;
+        requestOptions = {
+          method: action === "save" ? "PATCH" : "POST",
+          body: JSON.stringify({ config })
+        };
       }
 
-      const data = (await response.json()) as {
+      const { data, statusCode } = await apiRequest<{
+        ok?: boolean;
         integration?: IntegrationRecord;
         status?: string;
         message?: string;
-        error?: { message?: string };
-      };
-      const message = data.message ?? data.error?.message ?? `${title} update failed`;
+        code?: string;
+        field?: string;
+      }>(route, requestOptions);
+      const message = data.message ?? `${title} update failed`;
 
-      if (!response.ok || data.status === "ERROR") {
-        setToast(message);
-        if (data.integration) applyIntegrationUpdate(data.integration);
-        return;
-      }
+      setDebugDetails((current) => ({
+        ...current,
+        [type]: {
+          route,
+          statusCode,
+          lastRequestAt: new Date().toISOString(),
+          message,
+          code: data.code,
+          field: data.field
+        }
+      }));
 
       if (data.integration) applyIntegrationUpdate(data.integration);
       clearProtectedFields(type);
@@ -305,6 +399,32 @@ function CompanyIntegrationDrawer({
       if (action === "disconnect") {
         setFormValues((current) => ({ ...current, [type]: {} }));
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Integration request failed.";
+      const apiError = error instanceof IntegrationApiRequestError ? error : null;
+
+      if (apiError?.payload?.field) {
+        setFieldErrors((current) => ({
+          ...current,
+          [type]: {
+            ...(current[type] ?? {}),
+            [apiError.payload!.field!]: message
+          }
+        }));
+      }
+
+      setDebugDetails((current) => ({
+        ...current,
+        [type]: {
+          route: apiError?.route ?? `/api/admin/companies/${company.id}/integrations/${type}`,
+          statusCode: apiError?.statusCode ?? null,
+          lastRequestAt: new Date().toISOString(),
+          message,
+          code: apiError?.payload?.code,
+          field: apiError?.payload?.field
+        }
+      }));
+      setToast(message);
     } finally {
       setPending((current) => ({ ...current, [key]: false }));
     }
@@ -376,8 +496,10 @@ function CompanyIntegrationDrawer({
                     companyName={company.name}
                     integration={integrationMap.get(type)}
                     values={formValues[type] ?? {}}
+                    fieldErrors={fieldErrors[type] ?? {}}
                     pending={pending}
                     visibleFields={visibleFields}
+                    debugDetails={debugDetails[type] ?? null}
                     onVisibleChange={(field, visible) => setVisibleFields((current) => ({ ...current, [fieldKey(type, field)]: visible }))}
                     onChange={(field, value) => updateFormValue(type, field, value)}
                     onSave={() => runAction(type, "save")}
@@ -425,8 +547,10 @@ function IntegrationFormCard({
   companyName,
   integration,
   values,
+  fieldErrors,
   pending,
   visibleFields,
+  debugDetails,
   onVisibleChange,
   onChange,
   onSave,
@@ -440,8 +564,10 @@ function IntegrationFormCard({
   companyName: string;
   integration?: IntegrationRecord;
   values: Record<string, string>;
+  fieldErrors: Record<string, string>;
   pending: Record<string, boolean>;
   visibleFields: Record<string, boolean>;
+  debugDetails: IntegrationDebugDetails | null;
   onVisibleChange: (field: string, visible: boolean) => void;
   onChange: (field: string, value: string) => void;
   onSave: () => void;
@@ -484,6 +610,7 @@ function IntegrationFormCard({
             type={type}
             field={field}
             values={values}
+            error={fieldErrors[field.name]}
             integration={integration}
             visible={Boolean(visibleFields[fieldKey(type, field.name)])}
             onVisibleChange={(visible) => onVisibleChange(field.name, visible)}
@@ -507,6 +634,8 @@ function IntegrationFormCard({
         <p>Last verified: {displayDate(integration?.lastVerifiedAt)}</p>
         <p>Last error: {integration?.lastVerificationError ?? "None"}</p>
       </div>
+
+      <DebugDetails integration={integration} details={debugDetails} />
 
       <div className="mt-5 flex flex-wrap gap-2">
         {isKnowledgeBase ? (
@@ -555,6 +684,7 @@ function IntegrationField({
   type,
   field,
   values,
+  error,
   integration,
   visible,
   onVisibleChange,
@@ -563,6 +693,7 @@ function IntegrationField({
   type: IntegrationType;
   field: IntegrationFieldDefinition;
   values: Record<string, string>;
+  error?: string;
   integration?: IntegrationRecord;
   visible: boolean;
   onVisibleChange: (visible: boolean) => void;
@@ -640,8 +771,32 @@ function IntegrationField({
         </div>
       )}
 
+      {error ? <span className="mt-2 block text-xs font-semibold leading-5 text-rose-200">{error}</span> : null}
       {field.helpText ? <span className="mt-2 block text-xs leading-5 text-slate-500">{field.helpText}</span> : null}
     </label>
+  );
+}
+
+function DebugDetails({
+  integration,
+  details
+}: {
+  integration?: IntegrationRecord;
+  details: IntegrationDebugDetails | null;
+}) {
+  return (
+    <details className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-xs text-slate-400">
+      <summary className="cursor-pointer font-semibold text-slate-300">Debug details</summary>
+      <div className="mt-3 space-y-1">
+        <p>Last request: {details ? displayDate(details.lastRequestAt) : "Never"}</p>
+        <p>Route: {details?.route ?? "No request yet"}</p>
+        <p>Status code: {details?.statusCode ?? "None"}</p>
+        <p>Code: {details?.code ?? "None"}</p>
+        <p>Field: {details?.field ?? "None"}</p>
+        <p>Message: {details?.message ?? integration?.lastVerificationError ?? "None"}</p>
+        <p>Last verified: {displayDate(integration?.lastVerifiedAt)}</p>
+      </div>
+    </details>
   );
 }
 

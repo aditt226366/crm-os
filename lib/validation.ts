@@ -7,6 +7,7 @@ import {
   type FeatureKey,
   type IntegrationType
 } from "@/lib/constants";
+import { normalizeIntegrationType } from "@/lib/integrations/types";
 
 export const loginSchema = z
   .object({
@@ -139,5 +140,5 @@ export function parseFeatureKey(value: string): FeatureKey {
 }
 
 export function parseIntegrationType(value: string): IntegrationType {
-  return z.enum(INTEGRATION_TYPES).parse(value);
+  return normalizeIntegrationType(value);
 }

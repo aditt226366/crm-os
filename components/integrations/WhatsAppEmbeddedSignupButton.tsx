@@ -304,14 +304,19 @@ export function WhatsAppEmbeddedSignupButton({
       );
 
       const payload = (await response.json()) as {
+        ok?: boolean;
         integration?: IntegrationRecord;
         message?: string;
-        error?: { message?: string };
+        error?: string | { message?: string };
         status?: StatusPayload;
       };
 
       if (!response.ok || !payload.integration) {
-        throw new Error(payload.error?.message ?? "WhatsApp Embedded Signup could not be saved.");
+        const backendError =
+          payload.message ??
+          (typeof payload.error === "string" ? payload.error : payload.error?.message) ??
+          "WhatsApp Embedded Signup could not be saved.";
+        throw new Error(backendError);
       }
 
       const message = payload.message ?? `WhatsApp connected successfully for ${companyName}.`;

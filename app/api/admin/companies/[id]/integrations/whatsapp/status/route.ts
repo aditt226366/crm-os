@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
-import { ApiError, errorResponse, json } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { maskedDisplayForConfig, readEncryptedConfig } from "@/lib/integration-vault";
 
 type Context = { params: Promise<{ id: string }> };
@@ -45,7 +46,7 @@ export async function GET(request: NextRequest, context: Context) {
     const config = readEncryptedConfig(integration?.encryptedConfig);
     const masked = maskedDisplayForConfig("WHATSAPP_CLOUD", config) as Record<string, string>;
 
-    return json({
+    return integrationSuccess({
       connected:
         integration?.status === "CONNECTED" &&
         Boolean(config.WHATSAPP_BUSINESS_ACCOUNT_ID && config.WHATSAPP_PHONE_NUMBER_ID && config.WHATSAPP_ACCESS_TOKEN),
@@ -56,6 +57,6 @@ export async function GET(request: NextRequest, context: Context) {
       webhookUrl: webhookUrl(request)
     });
   } catch (error) {
-    return errorResponse(error);
+    return integrationErrorResponse(error);
   }
 }

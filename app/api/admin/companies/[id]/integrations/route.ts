@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
-import { errorResponse, json } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { INTEGRATION_TYPES } from "@/lib/constants";
 import { serializeIntegration } from "@/lib/serializers";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
@@ -12,6 +13,10 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const admin = await requirePlatformAdmin(request);
     const { id } = await context.params;
+    const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
+    if (!tenant) {
+      throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
+    }
     await Promise.all(
       INTEGRATION_TYPES.map((type) =>
         prisma.integration.upsert({
@@ -32,8 +37,11 @@ export async function GET(request: NextRequest, context: Context) {
       include: { createdBy: true, updatedBy: true },
       orderBy: { type: "asc" }
     });
-    return json({ integrations: integrations.map(serializeIntegration) });
+    return integrationSuccess({
+      message: "Integrations loaded",
+      integrations: integrations.map(serializeIntegration)
+    });
   } catch (error) {
-    return errorResponse(error);
+    return integrationErrorResponse(error);
   }
 }

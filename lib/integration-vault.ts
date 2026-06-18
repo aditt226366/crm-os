@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { INTEGRATION_TYPES, type IntegrationStatus, type IntegrationType } from "@/lib/constants";
 import { INTEGRATION_CATALOG, integrationFields, isSecretField, isSensitiveField } from "@/lib/integration-catalog";
 import { decryptJson, maskSecret } from "@/lib/security";
-import { env } from "@/lib/env";
 
 export type IntegrationConfig = Record<string, string>;
 
@@ -10,6 +9,7 @@ export type VerificationResult = {
   status: Extract<IntegrationStatus, "CONNECTED" | "ERROR">;
   message: string;
   metadata?: Record<string, unknown>;
+  field?: string;
 };
 
 type VerifyOptions = {
@@ -19,7 +19,7 @@ type VerifyOptions = {
   dependencies?: Partial<Record<IntegrationType, IntegrationConfig>>;
 };
 
-const GRAPH_API_VERSION = "v20.0";
+const PROVIDER_TIMEOUT_MS = 15_000;
 const TOTAL_INTEGRATIONS = INTEGRATION_TYPES.length;
 
 export { TOTAL_INTEGRATIONS };
@@ -33,6 +33,10 @@ export function safeIntegrationStatus(status?: string): IntegrationStatus {
     return status;
   }
   return "NOT_CONNECTED";
+}
+
+export function encryptionConfigured() {
+  return Boolean(process.env.ENCRYPTION_KEY?.trim());
 }
 
 export function readEncryptedConfig(encryptedConfig?: string | null): IntegrationConfig {
@@ -50,6 +54,15 @@ export function readEncryptedConfig(encryptedConfig?: string | null): Integratio
   }
 }
 
+export function isMaskedPlaceholder(value: string) {
+  const trimmed = value.trim();
+  return /^\*{4,}.{0,16}$/.test(trimmed) || /^saved securely/i.test(trimmed);
+}
+
+function normalizePrivateKey(value: string) {
+  return value.trim().replace(/\\n/g, "\n");
+}
+
 export function normalizeSubmittedConfig(type: IntegrationType, config?: Record<string, unknown>): IntegrationConfig {
   const allowed = new Set(integrationFields(type).map((field) => field.name));
   const normalized: IntegrationConfig = {};
@@ -58,8 +71,10 @@ export function normalizeSubmittedConfig(type: IntegrationType, config?: Record<
     if (!allowed.has(key)) continue;
     if (value === null || value === undefined) continue;
     const stringValue = String(value);
-    if (isSecretField(type, key) && stringValue.trim() === "") continue;
-    normalized[key] = key.includes("PRIVATE_KEY") ? stringValue.trim().replace(/\\n/g, "\n") : stringValue.trim();
+    const trimmed = stringValue.trim();
+    if (!trimmed) continue;
+    if (isSensitiveField(type, key) && isMaskedPlaceholder(trimmed)) continue;
+    normalized[key] = key.includes("PRIVATE_KEY") ? normalizePrivateKey(stringValue) : trimmed;
   }
 
   if (type === "META_ADS" && normalized.META_AD_ACCOUNT_ID) {
@@ -100,7 +115,7 @@ export function normalizeMetaAdAccountId(value: string) {
 }
 
 export function webhookUrlForTenant({ origin, tenantSlug, tenantId }: { origin?: string; tenantSlug?: string; tenantId: string }) {
-  const base = origin || env.APP_URL;
+  const base = origin || process.env.APP_URL || "http://127.0.0.1:3000";
   const tenant = encodeURIComponent(tenantSlug || tenantId);
   return `${base.replace(/\/$/, "")}/api/webhooks/whatsapp?tenant=${tenant}`;
 }
@@ -122,8 +137,13 @@ function urlValid(value: string) {
   }
 }
 
-function failure(message: string): VerificationResult {
-  return { status: "ERROR", message };
+function fieldFromMessage(message: string) {
+  const field = message.match(/^([A-Z0-9_]+)/)?.[1];
+  return field?.includes("_") ? field : undefined;
+}
+
+function failure(message: string, field?: string): VerificationResult {
+  return { status: "ERROR", message, field: field ?? fieldFromMessage(message) };
 }
 
 function success(message: string, metadata?: Record<string, unknown>): VerificationResult {
@@ -133,8 +153,8 @@ function success(message: string, metadata?: Record<string, unknown>): Verificat
 async function fetchJson(
   url: string,
   init?: RequestInit,
-  timeoutMs = 8000
-): Promise<{ ok: boolean; status: number; data: unknown; text: string }> {
+  timeoutMs = PROVIDER_TIMEOUT_MS
+): Promise<{ ok: boolean; status: number; data: unknown; text: string; timedOut: boolean }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -146,12 +166,18 @@ async function fetchJson(
     } catch {
       data = text;
     }
-    return { ok: response.ok, status: response.status, data, text };
+    return { ok: response.ok, status: response.status, data, text, timedOut: false };
   } catch (error) {
-    return { ok: false, status: 0, data: { error: String(error) }, text: String(error) };
+    const timedOut = error instanceof DOMException && error.name === "AbortError";
+    return { ok: false, status: 0, data: { error: String(error) }, text: String(error), timedOut };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function graphApiVersion() {
+  const version = process.env.META_GRAPH_VERSION?.trim() || "v20.0";
+  return version.startsWith("v") ? version : `v${version}`;
 }
 
 function graphErrorCode(data: unknown) {
@@ -172,6 +198,12 @@ async function verifyGoogleSheets(config: IntegrationConfig) {
   if (missingOrEmpty(config, "GOOGLE_PRIVATE_KEY")) {
     return failure("GOOGLE_PRIVATE_KEY wrong");
   }
+  if (
+    !config.GOOGLE_PRIVATE_KEY.startsWith("-----BEGIN PRIVATE KEY-----") ||
+    !config.GOOGLE_PRIVATE_KEY.endsWith("-----END PRIVATE KEY-----")
+  ) {
+    return failure("GOOGLE_PRIVATE_KEY wrong");
+  }
 
   try {
     crypto.createPrivateKey(config.GOOGLE_PRIVATE_KEY);
@@ -183,7 +215,7 @@ async function verifyGoogleSheets(config: IntegrationConfig) {
   let assertion: string;
   try {
     const key = await importPKCS8(config.GOOGLE_PRIVATE_KEY, "RS256");
-    assertion = await new SignJWT({ scope: "https://www.googleapis.com/auth/spreadsheets.readonly" })
+    assertion = await new SignJWT({ scope: "https://www.googleapis.com/auth/spreadsheets" })
       .setProtectedHeader({ alg: "RS256", typ: "JWT" })
       .setIssuer(config.GOOGLE_SERVICE_ACCOUNT_EMAIL)
       .setSubject(config.GOOGLE_SERVICE_ACCOUNT_EMAIL)
@@ -204,6 +236,9 @@ async function verifyGoogleSheets(config: IntegrationConfig) {
     })
   });
 
+  if (tokenResponse.timedOut) {
+    return failure("Google Sheets verification timed out");
+  }
   if (!tokenResponse.ok) {
     return failure("GOOGLE_PRIVATE_KEY wrong");
   }
@@ -214,22 +249,57 @@ async function verifyGoogleSheets(config: IntegrationConfig) {
   }
 
   const sheetResponse = await fetchJson(
-    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.GOOGLE_SHEETS_ID)}?fields=properties.title`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.GOOGLE_SHEETS_ID)}?fields=properties.title,sheets.properties.title`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
+  if (sheetResponse.timedOut) {
+    return failure("Google Sheets verification timed out");
+  }
   if (sheetResponse.status === 404) {
     return failure("GOOGLE_SHEETS_ID wrong");
   }
   if (sheetResponse.status === 403) {
-    return failure("GOOGLE_SERVICE_ACCOUNT_EMAIL wrong or sheet not shared with service account");
+    const text = sheetResponse.text.toLowerCase();
+    return text.includes("api") && text.includes("not") && text.includes("enabled")
+      ? failure("Google Sheets API is not enabled for this service account project")
+      : failure("GOOGLE_SERVICE_ACCOUNT_EMAIL wrong or sheet not shared with service account");
   }
   if (!sheetResponse.ok) {
     return failure("GOOGLE_SHEETS_ID wrong");
   }
 
-  const title = (sheetResponse.data as { properties?: { title?: string } } | null)?.properties?.title;
-  return success("Google Sheets connected successfully", { sheetTitle: title ?? "Connected Google Sheet" });
+  const sheet = sheetResponse.data as {
+    properties?: { title?: string };
+    sheets?: Array<{ properties?: { title?: string } }>;
+  } | null;
+  const firstSheetName = sheet?.sheets?.[0]?.properties?.title;
+
+  if (firstSheetName) {
+    const valuesResponse = await fetchJson(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.GOOGLE_SHEETS_ID)}/values/${encodeURIComponent(
+        `${firstSheetName}!A1:Z1`
+      )}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    if (valuesResponse.timedOut) {
+      return failure("Google Sheets verification timed out");
+    }
+    if (valuesResponse.status === 403) {
+      return failure("GOOGLE_SERVICE_ACCOUNT_EMAIL wrong or sheet not shared with service account");
+    }
+    if (!valuesResponse.ok && valuesResponse.status !== 400) {
+      return failure("GOOGLE_SHEETS_ID wrong");
+    }
+  }
+
+  return success("Google Sheets connected successfully", {
+    spreadsheetTitle: sheet?.properties?.title ?? "Connected Google Sheet",
+    sheetCount: sheet?.sheets?.length ?? 0,
+    firstSheetName: firstSheetName ?? null,
+    lastVerifiedAt: new Date().toISOString()
+  });
 }
 
 async function verifyWhatsappCloud(config: IntegrationConfig, options: VerifyOptions) {
@@ -247,35 +317,69 @@ async function verifyWhatsappCloud(config: IntegrationConfig, options: VerifyOpt
   }
 
   const phoneResponse = await fetchJson(
-    `https://graph.facebook.com/${GRAPH_API_VERSION}/${encodeURIComponent(
+    `https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(
       config.WHATSAPP_PHONE_NUMBER_ID
-    )}?fields=id,display_phone_number,verified_name&access_token=${encodeURIComponent(config.WHATSAPP_ACCESS_TOKEN)}`
+    )}?fields=id,display_phone_number,verified_name,quality_rating&access_token=${encodeURIComponent(config.WHATSAPP_ACCESS_TOKEN)}`
   );
 
+  if (phoneResponse.timedOut) {
+    return failure("WhatsApp verification timed out");
+  }
   if (!phoneResponse.ok) {
     return graphErrorCode(phoneResponse.data) === 190
       ? failure("WHATSAPP_ACCESS_TOKEN wrong")
       : failure("WHATSAPP_PHONE_NUMBER_ID wrong");
   }
 
-  const templateResponse = await fetchJson(
-    `https://graph.facebook.com/${GRAPH_API_VERSION}/${encodeURIComponent(
+  const wabaPhoneResponse = await fetchJson(
+    `https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(
       config.WHATSAPP_BUSINESS_ACCOUNT_ID
-    )}/message_templates?limit=1&access_token=${encodeURIComponent(config.WHATSAPP_ACCESS_TOKEN)}`
+    )}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating&limit=100&access_token=${encodeURIComponent(
+      config.WHATSAPP_ACCESS_TOKEN
+    )}`
   );
 
+  if (wabaPhoneResponse.timedOut) {
+    return failure("WhatsApp verification timed out");
+  }
+  if (!wabaPhoneResponse.ok) {
+    return graphErrorCode(wabaPhoneResponse.data) === 190
+      ? failure("WHATSAPP_ACCESS_TOKEN wrong")
+      : failure("WHATSAPP_BUSINESS_ACCOUNT_ID wrong");
+  }
+
+  const wabaPhones = ((wabaPhoneResponse.data as { data?: Array<{ id?: string }> } | null)?.data ?? []);
+  if (!wabaPhones.some((phone) => phone.id === config.WHATSAPP_PHONE_NUMBER_ID)) {
+    return failure("WHATSAPP_PHONE_NUMBER_ID does not belong to this WhatsApp Business Account");
+  }
+
+  const templateResponse = await fetchJson(
+    `https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(
+      config.WHATSAPP_BUSINESS_ACCOUNT_ID
+    )}/message_templates?limit=10&access_token=${encodeURIComponent(config.WHATSAPP_ACCESS_TOKEN)}`
+  );
+
+  if (templateResponse.timedOut) {
+    return failure("WhatsApp verification timed out");
+  }
   if (!templateResponse.ok) {
     return graphErrorCode(templateResponse.data) === 190
       ? failure("WHATSAPP_ACCESS_TOKEN wrong")
       : failure("WHATSAPP_BUSINESS_ACCOUNT_ID wrong");
   }
 
-  const phone = phoneResponse.data as { display_phone_number?: string; verified_name?: string };
+  const phone = phoneResponse.data as { display_phone_number?: string; verified_name?: string; quality_rating?: string };
+  const templates = (templateResponse.data as { data?: unknown[] } | null)?.data ?? [];
   return success("WhatsApp Cloud API connected successfully", {
     webhookUrl: webhookUrlForTenant(options),
     webhookStatus: "Ready for verification",
-    connectedPhoneNumber: phone.display_phone_number ?? config.WHATSAPP_PHONE_NUMBER_ID,
-    connectedPhoneName: phone.verified_name ?? "WhatsApp business phone",
+    displayPhoneNumber: phone.display_phone_number ?? config.WHATSAPP_PHONE_NUMBER_ID,
+    verifiedName: phone.verified_name ?? "WhatsApp business phone",
+    qualityRating: phone.quality_rating ?? null,
+    wabaId: config.WHATSAPP_BUSINESS_ACCOUNT_ID,
+    phoneNumberId: config.WHATSAPP_PHONE_NUMBER_ID,
+    templateCount: templates.length,
+    lastVerifiedAt: new Date().toISOString(),
     lastWebhookReceived: null,
     lastMessageStatusUpdate: null
   });
@@ -291,24 +395,35 @@ async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: 
 
   const whatsappConfig = dependencies?.WHATSAPP_CLOUD;
   if (!whatsappConfig?.WHATSAPP_ACCESS_TOKEN || !whatsappConfig.WHATSAPP_BUSINESS_ACCOUNT_ID) {
-    return failure("WHATSAPP_ACCESS_TOKEN wrong or WhatsApp integration not connected");
+    return failure("WhatsApp Cloud API is not connected.");
   }
 
   const response = await fetchJson(
-    `https://graph.facebook.com/${GRAPH_API_VERSION}/${encodeURIComponent(
+    `https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(
       whatsappConfig.WHATSAPP_BUSINESS_ACCOUNT_ID
     )}/message_templates?name=${encodeURIComponent(config.WHATSAPP_TEMPLATE_NAME)}&access_token=${encodeURIComponent(
       whatsappConfig.WHATSAPP_ACCESS_TOKEN
     )}`
   );
 
+  if (response.timedOut) {
+    return failure("WhatsApp verification timed out");
+  }
   if (!response.ok) {
     return graphErrorCode(response.data) === 190
-      ? failure("WHATSAPP_ACCESS_TOKEN wrong or WhatsApp integration not connected")
+      ? failure("WhatsApp Cloud API is not connected.")
       : failure("WHATSAPP_TEMPLATE_NAME wrong");
   }
 
-  const templates = ((response.data as { data?: Array<{ name?: string; language?: string; status?: string }> })?.data ?? []);
+  const templates = ((response.data as {
+    data?: Array<{
+      name?: string;
+      language?: string;
+      status?: string;
+      category?: string;
+      components?: unknown[];
+    }>;
+  })?.data ?? []);
   const nameMatch = templates.filter((template) => template.name === config.WHATSAPP_TEMPLATE_NAME);
   if (!nameMatch.length) {
     return failure("WHATSAPP_TEMPLATE_NAME wrong");
@@ -318,12 +433,15 @@ async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: 
     return failure("WHATSAPP_TEMPLATE_LANGUAGE wrong");
   }
   if (languageMatch.status !== "APPROVED") {
-    return failure("WHATSAPP_TEMPLATE_NAME wrong");
+    return failure("WhatsApp template is not approved");
   }
 
   return success("Broadcast & Campaign Templates connected successfully", {
+    templateName: languageMatch.name,
+    templateLanguage: languageMatch.language,
     templateStatus: languageMatch.status,
-    templateLanguage: languageMatch.language
+    category: languageMatch.category ?? null,
+    componentCount: Array.isArray(languageMatch.components) ? languageMatch.components.length : 0
   });
 }
 
@@ -336,21 +454,26 @@ async function verifyMetaAds(config: IntegrationConfig) {
   }
 
   const response = await fetchJson(
-    `https://graph.facebook.com/${GRAPH_API_VERSION}/${encodeURIComponent(
+    `https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(
       config.META_AD_ACCOUNT_ID
-    )}?fields=id,name,account_status,currency&access_token=${encodeURIComponent(config.META_ADS_ACCESS_TOKEN)}`
+    )}?fields=id,name,account_status,currency,timezone_name&access_token=${encodeURIComponent(config.META_ADS_ACCESS_TOKEN)}`
   );
 
+  if (response.timedOut) {
+    return failure("Meta Ads verification timed out");
+  }
   if (!response.ok) {
     return graphErrorCode(response.data) === 190 ? failure("META_ADS_ACCESS_TOKEN wrong") : failure("META_AD_ACCOUNT_ID wrong");
   }
 
-  const account = response.data as { id?: string; name?: string; account_status?: number; currency?: string };
+  const account = response.data as { id?: string; name?: string; account_status?: number; currency?: string; timezone_name?: string };
   return success("Meta Ads connected successfully", {
     adAccountId: account.id ?? config.META_AD_ACCOUNT_ID,
     adAccountName: account.name ?? "Meta ad account",
     adAccountStatus: account.account_status ?? null,
-    currency: account.currency ?? null
+    currency: account.currency ?? null,
+    timezone: account.timezone_name ?? null,
+    lastVerifiedAt: new Date().toISOString()
   });
 }
 
@@ -367,6 +490,9 @@ async function verifyKnowledgeBase(config: IntegrationConfig) {
       return failure("Company website wrong");
     }
     const response = await fetchJson(config.COMPANY_WEBSITE_URL, { headers: { Accept: "text/html,text/plain" } });
+    if (response.timedOut) {
+      return failure("Knowledge base verification timed out");
+    }
     if (!response.ok) {
       return failure("Company website wrong");
     }
@@ -410,8 +536,9 @@ async function verifyAiModel(config: IntegrationConfig) {
 
   const provider = config.AI_PROVIDER;
   let response: Awaited<ReturnType<typeof fetchJson>>;
+  const providerKey = provider.trim().toUpperCase().replaceAll(" ", "_").replaceAll("-", "_");
 
-  if (provider === "Anthropic") {
+  if (providerKey === "ANTHROPIC") {
     response = await fetchJson("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -425,7 +552,7 @@ async function verifyAiModel(config: IntegrationConfig) {
         messages: [{ role: "user", content: "Reply with OK." }]
       })
     });
-  } else if (provider === "Gemini") {
+  } else if (providerKey === "GEMINI") {
     response = await fetchJson(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
         config.AI_MODEL_NAME
@@ -437,7 +564,11 @@ async function verifyAiModel(config: IntegrationConfig) {
       }
     );
   } else {
-    const baseUrl = provider === "Custom OpenAI Compatible" ? config.AI_BASE_URL : "https://api.openai.com/v1";
+    const isCustom = providerKey === "CUSTOM_OPENAI_COMPATIBLE";
+    if (providerKey !== "OPENAI" && !isCustom) {
+      return failure("AI_PROVIDER wrong");
+    }
+    const baseUrl = isCustom ? config.AI_BASE_URL : "https://api.openai.com/v1";
     if (!baseUrl || !urlValid(baseUrl)) {
       return failure("AI_BASE_URL wrong");
     }
@@ -455,6 +586,9 @@ async function verifyAiModel(config: IntegrationConfig) {
     });
   }
 
+  if (response.timedOut) {
+    return failure("AI model verification timed out");
+  }
   if (response.status === 401 || response.status === 403) {
     return failure("AI_API_KEY wrong");
   }
@@ -462,20 +596,25 @@ async function verifyAiModel(config: IntegrationConfig) {
     return failure("AI_MODEL_NAME wrong");
   }
   if (!response.ok) {
-    return provider === "Custom OpenAI Compatible" ? failure("AI_BASE_URL wrong") : failure("AI_API_KEY wrong");
+    return providerKey === "CUSTOM_OPENAI_COMPATIBLE" ? failure("AI_BASE_URL wrong") : failure("AI_API_KEY wrong");
   }
 
   return success("AI Model for Messaging connected successfully", {
     aiProvider: provider,
-    aiModelName: config.AI_MODEL_NAME
+    aiModelName: config.AI_MODEL_NAME,
+    lastVerifiedAt: new Date().toISOString()
   });
 }
 
 export async function verifyIntegrationConfig(type: IntegrationType, config: IntegrationConfig, options: VerifyOptions) {
+  if (type === "AI_MODEL") {
+    config.AI_PROVIDER ||= "Anthropic";
+    config.AI_MODEL_NAME ||= "claude-sonnet-4-6";
+  }
+
   const fields = INTEGRATION_CATALOG[type].fields;
   for (const field of fields) {
     if (field.required && missingOrEmpty(config, field.name)) {
-      if (field.name === "AI_PROVIDER") return failure("AI_API_KEY wrong");
       return failure(`${field.name} wrong`);
     }
   }

@@ -2,8 +2,10 @@ import { NextRequest } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
-import { errorResponse, json } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { parseIntegrationType } from "@/lib/validation";
+import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import { serializeIntegration } from "@/lib/serializers";
 import { writeAuditLog } from "@/lib/audit";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
@@ -15,6 +17,10 @@ export async function POST(request: NextRequest, context: Context) {
     const admin = await requirePlatformAdmin(request);
     const { id, integrationType } = await context.params;
     const type = parseIntegrationType(integrationType);
+    const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
+    if (!tenant) {
+      throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
+    }
     const integration = await prisma.integration.upsert({
       where: { tenantId_type: { tenantId: id, type } },
       create: {
@@ -45,8 +51,11 @@ export async function POST(request: NextRequest, context: Context) {
       entityId: integration.id,
       newValue: { type, status: "NOT_CONNECTED" }
     });
-    return json({ integration: serializeIntegration(integration) });
+    return integrationSuccess({
+      message: `${INTEGRATION_DEFINITIONS[type].name} disconnected`,
+      integration: serializeIntegration(integration)
+    });
   } catch (error) {
-    return errorResponse(error);
+    return integrationErrorResponse(error);
   }
 }

@@ -4,11 +4,12 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
-import { ApiError, errorResponse, json } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { writeAuditLog } from "@/lib/audit";
 import { serializeIntegration } from "@/lib/serializers";
 import { encryptJson, scrubSecretsFromLogs } from "@/lib/security";
-import { maskedDisplayForConfig, webhookUrlForTenant, type IntegrationConfig } from "@/lib/integration-vault";
+import { encryptionConfigured, maskedDisplayForConfig, webhookUrlForTenant, type IntegrationConfig } from "@/lib/integration-vault";
 import { validateMetaEmbeddedSignupEnv } from "@/lib/integration-env";
 
 type Context = { params: Promise<{ id: string }> };
@@ -156,6 +157,9 @@ export async function POST(request: NextRequest, context: Context) {
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
+    if (!encryptionConfigured()) {
+      throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
+    }
 
     const accessToken = await exchangeCodeForAccessToken(body.code);
     const config: IntegrationConfig = {
@@ -216,8 +220,7 @@ export async function POST(request: NextRequest, context: Context) {
       })
     });
 
-    return json({
-      ok: true,
+    return integrationSuccess({
       message: `WhatsApp connected successfully for ${tenant.name}.`,
       integration: serializeIntegration(integration),
       status: statusPayload({
@@ -229,6 +232,6 @@ export async function POST(request: NextRequest, context: Context) {
       })
     });
   } catch (error) {
-    return errorResponse(error);
+    return integrationErrorResponse(error);
   }
 }

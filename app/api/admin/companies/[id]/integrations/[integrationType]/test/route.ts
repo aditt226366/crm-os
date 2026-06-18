@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
-import { errorResponse, json } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { integrationErrorResponse, integrationFailure, integrationSuccess } from "@/lib/integrations/responses";
 import { parseIntegrationType } from "@/lib/validation";
 import { writeAuditLog } from "@/lib/audit";
 import { readEncryptedConfig, verifyIntegrationConfig } from "@/lib/integration-vault";
@@ -14,10 +15,13 @@ export async function POST(request: NextRequest, context: Context) {
     const { id, integrationType } = await context.params;
     const type = parseIntegrationType(integrationType);
     const [tenant, integration, whatsappIntegration] = await Promise.all([
-      prisma.tenant.findUnique({ where: { id }, select: { slug: true } }),
+      prisma.tenant.findUnique({ where: { id }, select: { id: true, slug: true } }),
       prisma.integration.findUnique({ where: { tenantId_type: { tenantId: id, type } } }),
       prisma.integration.findUnique({ where: { tenantId_type: { tenantId: id, type: "WHATSAPP_CLOUD" } } })
     ]);
+    if (!tenant) {
+      throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
+    }
     const result = await verifyIntegrationConfig(type, readEncryptedConfig(integration?.encryptedConfig), {
       tenantId: id,
       tenantSlug: tenant?.slug,
@@ -35,11 +39,17 @@ export async function POST(request: NextRequest, context: Context) {
       entityId: integration?.id ?? type,
       newValue: { type, status: result.status, message: result.message }
     });
-    return json({
+    const responseBody = {
       status: result.status,
-      message: result.message
-    });
+      message: result.message,
+      code: result.status === "ERROR" ? "INTEGRATION_TEST_FAILED" : "INTEGRATION_TESTED",
+      field: result.field
+    };
+
+    return result.status === "ERROR"
+      ? integrationFailure(responseBody, { status: 400 })
+      : integrationSuccess(responseBody);
   } catch (error) {
-    return errorResponse(error);
+    return integrationErrorResponse(error);
   }
 }
