@@ -22,6 +22,7 @@ import {
 import { INTEGRATION_TYPES, type IntegrationType } from "@/lib/constants";
 import { INTEGRATION_CATALOG, IntegrationFieldDefinition, isSensitiveField } from "@/lib/integration-catalog";
 import { IntegrationRecord } from "@/components/admin/IntegrationCard";
+import { WhatsAppEmbeddedSignupButton } from "@/components/integrations/WhatsAppEmbeddedSignupButton";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
 import { NeonButton } from "@/components/shared/NeonButton";
@@ -371,6 +372,8 @@ function CompanyIntegrationDrawer({
                   <IntegrationFormCard
                     key={type}
                     type={type}
+                    companyId={company.id}
+                    companyName={company.name}
                     integration={integrationMap.get(type)}
                     values={formValues[type] ?? {}}
                     pending={pending}
@@ -381,6 +384,11 @@ function CompanyIntegrationDrawer({
                     onVerify={() => runAction(type, "verify")}
                     onTest={() => runAction(type, "test")}
                     onDisconnect={() => runAction(type, "disconnect")}
+                    onEmbeddedSignupConnected={(integration, message) => {
+                      applyIntegrationUpdate(integration);
+                      clearProtectedFields("WHATSAPP_CLOUD");
+                      setToast(message);
+                    }}
                   />
                 ))}
               </div>
@@ -413,6 +421,8 @@ function buildVisibleDefaults(integrations: IntegrationRecord[]) {
 
 function IntegrationFormCard({
   type,
+  companyId,
+  companyName,
   integration,
   values,
   pending,
@@ -422,9 +432,12 @@ function IntegrationFormCard({
   onSave,
   onVerify,
   onTest,
-  onDisconnect
+  onDisconnect,
+  onEmbeddedSignupConnected
 }: {
   type: IntegrationType;
+  companyId: string;
+  companyName: string;
   integration?: IntegrationRecord;
   values: Record<string, string>;
   pending: Record<string, boolean>;
@@ -435,6 +448,7 @@ function IntegrationFormCard({
   onVerify: () => void;
   onTest: () => void;
   onDisconnect: () => void;
+  onEmbeddedSignupConnected: (integration: IntegrationRecord, message: string) => void;
 }) {
   const catalog = INTEGRATION_CATALOG[type];
   const Icon = iconMap[catalog.icon];
@@ -453,6 +467,15 @@ function IntegrationFormCard({
       <h3 className="mt-5 text-lg font-semibold text-white">{catalog.title}</h3>
       <p className="mt-2 text-sm leading-6 text-slate-400">{catalog.description}</p>
       {catalog.helpText ? <p className="mt-3 text-xs leading-5 text-cyan-100/80">{catalog.helpText}</p> : null}
+      {type === "WHATSAPP_CLOUD" ? (
+        <div className="mt-5">
+          <WhatsAppEmbeddedSignupButton
+            companyId={companyId}
+            companyName={companyName}
+            onConnected={({ integration, message }) => onEmbeddedSignupConnected(integration, message)}
+          />
+        </div>
+      ) : null}
 
       <div className="mt-5 space-y-4">
         {catalog.fields.map((field) => (

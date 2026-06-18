@@ -103,7 +103,7 @@ export async function GET(request: NextRequest) {
   const token = searchParams.get("hub.verify_token");
   const challenge = searchParams.get("hub.challenge");
   const tenantParam = searchParams.get("tenant");
-  let expected = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+  let expected = process.env.WHATSAPP_VERIFY_TOKEN ?? process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
 
   if (tenantParam) {
     const tenant = await prisma.tenant.findFirst({ where: { OR: [{ id: tenantParam }, { slug: tenantParam }] } });
