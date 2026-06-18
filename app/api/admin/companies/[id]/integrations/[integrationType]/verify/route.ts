@@ -83,8 +83,7 @@ export async function POST(request: NextRequest, context: Context) {
         lastVerifiedAt: result.status === "CONNECTED" ? new Date() : undefined,
         lastVerificationError: result.status === "ERROR" ? result.message : null,
         updatedById: admin.id
-      },
-      include: { createdBy: true, updatedBy: true }
+      }
     });
 
     await writeAuditLog({

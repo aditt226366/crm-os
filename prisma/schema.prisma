@@ -245,8 +245,6 @@ model User {
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   updatedFeatures     TenantFeature[] @relation("FeatureUpdatedBy")
-  createdIntegrations Integration[]   @relation("IntegrationCreatedBy")
-  updatedIntegrations Integration[]   @relation("IntegrationUpdatedBy")
   auditLogs           AuditLog[]      @relation("AuditActor")
   refreshTokens       RefreshToken[]
 
@@ -314,9 +312,7 @@ model Integration {
   lastVerifiedAt  DateTime?
   lastVerificationError String?
   createdById     String?
-  createdBy       User?             @relation("IntegrationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById     String?
-  updatedBy       User?             @relation("IntegrationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   updatedAt       DateTime          @updatedAt
   createdAt       DateTime          @default(now())
 

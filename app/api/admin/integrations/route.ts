@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     await requirePlatformAdmin(request);
     const integrations = await prisma.integration.findMany({
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
-      include: { tenant: true, createdBy: true, updatedBy: true },
+      include: { tenant: true },
       take: 200
     });
     return json({

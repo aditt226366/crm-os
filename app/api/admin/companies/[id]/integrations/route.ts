@@ -36,7 +36,6 @@ export async function GET(request: NextRequest, context: Context) {
     );
     const integrations = await prisma.integration.findMany({
       where: { tenantId: id },
-      include: { createdBy: true, updatedBy: true },
       orderBy: { type: "asc" }
     });
     return integrationSuccess({

@@ -30,7 +30,7 @@ export async function GET(request: NextRequest, context: Context) {
           }
         },
         features: { include: { updatedBy: true } },
-        integrations: { include: { createdBy: true } }
+        integrations: true
       }
     });
     if (!company) {

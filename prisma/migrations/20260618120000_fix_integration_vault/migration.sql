@@ -129,29 +129,5 @@ BEGIN
   END IF;
 END $$;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'Integration_createdById_fkey'
-  ) THEN
-    ALTER TABLE "Integration"
-    ADD CONSTRAINT "Integration_createdById_fkey"
-    FOREIGN KEY ("createdById") REFERENCES "User"("id")
-    ON DELETE SET NULL
-    ON UPDATE CASCADE;
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'Integration_updatedById_fkey'
-  ) THEN
-    ALTER TABLE "Integration"
-    ADD CONSTRAINT "Integration_updatedById_fkey"
-    FOREIGN KEY ("updatedById") REFERENCES "User"("id")
-    ON DELETE SET NULL
-    ON UPDATE CASCADE;
-  END IF;
-END $$;
+ALTER TABLE "Integration" DROP CONSTRAINT IF EXISTS "Integration_createdById_fkey";
+ALTER TABLE "Integration" DROP CONSTRAINT IF EXISTS "Integration_updatedById_fkey";

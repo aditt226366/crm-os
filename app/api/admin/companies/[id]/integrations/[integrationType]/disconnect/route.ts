@@ -43,8 +43,7 @@ export async function POST(request: NextRequest, context: Context) {
         lastVerifiedAt: null,
         lastVerificationError: null,
         updatedById: admin.id
-      },
-      include: { createdBy: true, updatedBy: true }
+      }
     });
     await writeAuditLog({
       request,

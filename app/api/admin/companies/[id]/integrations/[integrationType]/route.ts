@@ -47,8 +47,7 @@ export async function GET(request: NextRequest, context: Context) {
         maskedDisplay: defaultMaskedDisplay(),
         createdById: admin.id
       },
-      update: {},
-      include: { createdBy: true, updatedBy: true }
+      update: {}
     });
 
     return integrationSuccess({
@@ -113,8 +112,7 @@ export async function PATCH(request: NextRequest, context: Context) {
         maskedDisplay: asJson(maskedDisplay),
         lastVerificationError: status === "NOT_CONNECTED" ? null : undefined,
         updatedById: admin.id
-      },
-      include: { createdBy: true, updatedBy: true }
+      }
     });
     await writeAuditLog({
       request,
