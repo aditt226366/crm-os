@@ -48,7 +48,15 @@ export async function GET(request: NextRequest) {
       prisma.auditLog.findMany({
         orderBy: { createdAt: "desc" },
         take: 8,
-        include: { actor: true, tenant: true }
+        select: {
+          id: true,
+          action: true,
+          entityType: true,
+          entityId: true,
+          actorUserId: true,
+          tenantId: true,
+          createdAt: true
+        }
       })
     ]);
 
@@ -79,8 +87,8 @@ export async function GET(request: NextRequest) {
         action: action.action,
         entityType: action.entityType,
         entityId: action.entityId,
-        actor: action.actor?.name ?? "System",
-        company: action.tenant?.name ?? null,
+        actor: action.actorUserId ?? "System",
+        company: action.tenantId,
         createdAt: action.createdAt.toISOString()
       }))
     });

@@ -7,7 +7,7 @@ import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations
 import { parseIntegrationType } from "@/lib/validation";
 import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import { serializeIntegration } from "@/lib/serializers";
-import { writeAuditLog } from "@/lib/audit";
+import { safeCreateAuditLog } from "@/lib/audit";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
 
 type Context = { params: Promise<{ id: string; integrationType: string }> };
@@ -15,8 +15,10 @@ type Context = { params: Promise<{ id: string; integrationType: string }> };
 export async function POST(request: NextRequest, context: Context) {
   let companyId = "unknown";
   let rawIntegrationType = "unknown";
+  let includeDebug = false;
   try {
     const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const { id, integrationType } = await context.params;
     companyId = id;
     rawIntegrationType = integrationType;
@@ -45,7 +47,7 @@ export async function POST(request: NextRequest, context: Context) {
         updatedById: admin.id
       }
     });
-    await writeAuditLog({
+    await safeCreateAuditLog({
       request,
       actorUserId: admin.id,
       tenantId: id,
@@ -62,7 +64,8 @@ export async function POST(request: NextRequest, context: Context) {
     return integrationErrorResponse(error, {
       route: request.nextUrl.pathname,
       companyId,
-      integrationType: rawIntegrationType
+      integrationType: rawIntegrationType,
+      includeDebug
     });
   }
 }

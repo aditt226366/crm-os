@@ -8,29 +8,52 @@ type IntegrationResponseOptions = {
   route?: string;
   integrationType?: string;
   companyId?: string;
+  includeDebug?: boolean;
+};
+
+type PrismaDebug = {
+  prismaCode?: string;
+  prismaMeta?: unknown;
+  prismaMessage: string;
 };
 
 function databaseMessage(error: unknown) {
-  const code =
-    error instanceof Prisma.PrismaClientKnownRequestError
-      ? error.code
-      : undefined;
+  const code = prismaDebug(error).prismaCode;
   return code ? `Database request failed: ${code}` : "Database request failed.";
 }
 
-function logDatabaseError(error: unknown, options: IntegrationResponseOptions) {
+function prismaDebug(error: unknown): PrismaDebug {
   const details = error as { name?: unknown; code?: unknown; message?: unknown };
-  console.error("[integrations.db] failed", {
-    integrationType: options.integrationType,
-    companyId: options.companyId,
-    errorName: typeof details.name === "string" ? details.name : error instanceof Error ? error.name : "UnknownError",
-    errorCode:
+  return {
+    prismaCode:
       error instanceof Prisma.PrismaClientKnownRequestError
         ? error.code
         : typeof details.code === "string"
           ? details.code
           : undefined,
-    errorMessage: typeof details.message === "string" ? details.message : String(error)
+    prismaMeta: error instanceof Prisma.PrismaClientKnownRequestError ? error.meta : undefined,
+    prismaMessage: typeof details.message === "string" ? details.message : String(error)
+  };
+}
+
+function databaseFailureBody(error: unknown, options: IntegrationResponseOptions) {
+  return {
+    ok: false,
+    code: "DATABASE_REQUEST_FAILED",
+    message: databaseMessage(error),
+    ...(options.includeDebug ? { debug: prismaDebug(error) } : {})
+  };
+}
+
+function logDatabaseError(error: unknown, options: IntegrationResponseOptions) {
+  const debug = prismaDebug(error);
+  console.error("[integrations.db] failed", {
+    integrationType: options.integrationType,
+    companyId: options.companyId,
+    errorName: error instanceof Error ? error.name : "UnknownError",
+    errorCode: debug.prismaCode,
+    errorMeta: debug.prismaMeta,
+    errorMessage: debug.prismaMessage
   });
 }
 
@@ -74,14 +97,7 @@ export function integrationErrorResponse(error: unknown, options: IntegrationRes
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     logDatabaseError(error, options);
-    return json(
-      {
-        ok: false,
-        code: "DATABASE_REQUEST_FAILED",
-        message: databaseMessage(error)
-      },
-      { status: 500 }
-    );
+    return json(databaseFailureBody(error, options), { status: 500 });
   }
 
   if (
@@ -90,14 +106,7 @@ export function integrationErrorResponse(error: unknown, options: IntegrationRes
     error instanceof Prisma.PrismaClientRustPanicError
   ) {
     logDatabaseError(error, options);
-    return json(
-      {
-        ok: false,
-        code: "DATABASE_REQUEST_FAILED",
-        message: databaseMessage(error)
-      },
-      { status: 500 }
-    );
+    return json(databaseFailureBody(error, options), { status: 500 });
   }
 
   console.error("[integrations.api] Unhandled error", {

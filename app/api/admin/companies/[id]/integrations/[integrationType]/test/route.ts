@@ -4,7 +4,7 @@ import { requirePlatformAdmin } from "@/lib/guards";
 import { ApiError } from "@/lib/api";
 import { integrationErrorResponse, integrationFailure, integrationSuccess } from "@/lib/integrations/responses";
 import { parseIntegrationType } from "@/lib/validation";
-import { writeAuditLog } from "@/lib/audit";
+import { safeCreateAuditLog } from "@/lib/audit";
 import { readEncryptedConfig, verifyIntegrationConfig } from "@/lib/integration-vault";
 
 type Context = { params: Promise<{ id: string; integrationType: string }> };
@@ -12,8 +12,10 @@ type Context = { params: Promise<{ id: string; integrationType: string }> };
 export async function POST(request: NextRequest, context: Context) {
   let companyId = "unknown";
   let rawIntegrationType = "unknown";
+  let includeDebug = false;
   try {
     const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const { id, integrationType } = await context.params;
     companyId = id;
     rawIntegrationType = integrationType;
@@ -34,7 +36,7 @@ export async function POST(request: NextRequest, context: Context) {
         WHATSAPP_CLOUD: readEncryptedConfig(whatsappIntegration?.encryptedConfig)
       }
     });
-    await writeAuditLog({
+    await safeCreateAuditLog({
       request,
       actorUserId: admin.id,
       tenantId: id,
@@ -57,7 +59,8 @@ export async function POST(request: NextRequest, context: Context) {
     return integrationErrorResponse(error, {
       route: request.nextUrl.pathname,
       companyId,
-      integrationType: rawIntegrationType
+      integrationType: rawIntegrationType,
+      includeDebug
     });
   }
 }

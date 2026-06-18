@@ -8,7 +8,7 @@ import { integrationPatchSchema, parseIntegrationType } from "@/lib/validation";
 import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import { scrubSecretsFromLogs } from "@/lib/security";
 import { serializeIntegration } from "@/lib/serializers";
-import { writeAuditLog } from "@/lib/audit";
+import { safeCreateAuditLog } from "@/lib/audit";
 import {
   defaultMaskedDisplay,
   encryptionConfigured,
@@ -32,8 +32,10 @@ function nullableJson(value: unknown) {
 export async function GET(request: NextRequest, context: Context) {
   let companyId = "unknown";
   let rawIntegrationType = "unknown";
+  let includeDebug = false;
   try {
     const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const { id, integrationType: rawType } = await context.params;
     companyId = id;
     rawIntegrationType = rawType;
@@ -65,7 +67,8 @@ export async function GET(request: NextRequest, context: Context) {
     return integrationErrorResponse(error, {
       route: request.nextUrl.pathname,
       companyId,
-      integrationType: rawIntegrationType
+      integrationType: rawIntegrationType,
+      includeDebug
     });
   }
 }
@@ -73,8 +76,10 @@ export async function GET(request: NextRequest, context: Context) {
 export async function PATCH(request: NextRequest, context: Context) {
   let companyId = "unknown";
   let rawIntegrationType = "unknown";
+  let includeDebug = false;
   try {
     const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const { id, integrationType: rawType } = await context.params;
     companyId = id;
     rawIntegrationType = rawType;
@@ -130,7 +135,7 @@ export async function PATCH(request: NextRequest, context: Context) {
         updatedById: adminUserId
       }
     });
-    await writeAuditLog({
+    await safeCreateAuditLog({
       request,
       actorUserId: adminUserId,
       tenantId,
@@ -148,7 +153,8 @@ export async function PATCH(request: NextRequest, context: Context) {
     return integrationErrorResponse(error, {
       route: request.nextUrl.pathname,
       companyId,
-      integrationType: rawIntegrationType
+      integrationType: rawIntegrationType,
+      includeDebug
     });
   }
 }

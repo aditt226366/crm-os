@@ -6,8 +6,10 @@ import { integrationErrorResponse } from "@/lib/integrations/responses";
 import { serializeIntegration } from "@/lib/serializers";
 
 export async function GET(request: NextRequest) {
+  let includeDebug = false;
   try {
-    await requirePlatformAdmin(request);
+    const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const integrations = await prisma.integration.findMany({
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
       include: { tenant: true },
@@ -26,7 +28,8 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     return integrationErrorResponse(error, {
-      route: request.nextUrl.pathname
+      route: request.nextUrl.pathname,
+      includeDebug
     });
   }
 }

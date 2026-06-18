@@ -245,7 +245,6 @@ model User {
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   updatedFeatures     TenantFeature[] @relation("FeatureUpdatedBy")
-  auditLogs           AuditLog[]      @relation("AuditActor")
   refreshTokens       RefreshToken[]
 
   @@index([tenantId])
@@ -265,7 +264,6 @@ model Tenant {
   features            TenantFeature[]
   integrations        Integration[]
   usageLogs           ApiUsageLog[]
-  auditLogs           AuditLog[]
   contacts            Contact[]
   conversations       Conversation[]
   messages            Message[]
@@ -345,11 +343,9 @@ model ApiUsageLog {
 model AuditLog {
   id          String   @id @default(cuid())
   actorUserId String?
-  actor       User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
   tenantId    String?
-  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   action      String
-  entityType  String
+  entityType  String?
   entityId    String?
   oldValue    Json?
   newValue    Json?

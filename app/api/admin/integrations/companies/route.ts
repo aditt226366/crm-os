@@ -45,8 +45,10 @@ function serializeCompany(tenant: {
 }
 
 export async function GET(request: NextRequest) {
+  let includeDebug = false;
   try {
-    await requirePlatformAdmin(request);
+    const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const tenants = await prisma.tenant.findMany({
       orderBy: { createdAt: "desc" },
       include: {
@@ -57,7 +59,8 @@ export async function GET(request: NextRequest) {
     return json({ companies: tenants.map(serializeCompany) });
   } catch (error) {
     return integrationErrorResponse(error, {
-      route: request.nextUrl.pathname
+      route: request.nextUrl.pathname,
+      includeDebug
     });
   }
 }

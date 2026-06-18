@@ -11,8 +11,10 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function GET(request: NextRequest, context: Context) {
   let companyId = "unknown";
+  let includeDebug = false;
   try {
     const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const { id } = await context.params;
     companyId = id;
     const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
@@ -28,7 +30,8 @@ export async function GET(request: NextRequest, context: Context) {
             type,
             status: "NOT_CONNECTED",
             maskedDisplay: defaultMaskedDisplay(),
-            createdById: admin.id
+            createdById: admin.id,
+            updatedById: admin.id
           },
           update: {}
         })
@@ -45,7 +48,8 @@ export async function GET(request: NextRequest, context: Context) {
   } catch (error) {
     return integrationErrorResponse(error, {
       route: request.nextUrl.pathname,
-      companyId
+      companyId,
+      includeDebug
     });
   }
 }

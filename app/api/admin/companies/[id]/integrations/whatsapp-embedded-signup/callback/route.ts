@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { ApiError } from "@/lib/api";
 import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
-import { writeAuditLog } from "@/lib/audit";
+import { safeCreateAuditLog } from "@/lib/audit";
 import { serializeIntegration } from "@/lib/serializers";
 import { scrubSecretsFromLogs } from "@/lib/security";
 import {
@@ -152,8 +152,10 @@ function statusPayload({
 
 export async function POST(request: NextRequest, context: Context) {
   let companyId = "unknown";
+  let includeDebug = false;
   try {
     const admin = await requirePlatformAdmin(request);
+    includeDebug = admin.role === "PLATFORM_ADMIN";
     const { id } = await context.params;
     companyId = id;
     const body = callbackSchema.parse(await request.json());
@@ -212,7 +214,7 @@ export async function POST(request: NextRequest, context: Context) {
       }
     });
 
-    await writeAuditLog({
+    await safeCreateAuditLog({
       request,
       actorUserId: admin.id,
       tenantId: tenant.id,
@@ -242,7 +244,8 @@ export async function POST(request: NextRequest, context: Context) {
     return integrationErrorResponse(error, {
       route: request.nextUrl.pathname,
       companyId,
-      integrationType: "WHATSAPP_CLOUD"
+      integrationType: "WHATSAPP_CLOUD",
+      includeDebug
     });
   }
 }

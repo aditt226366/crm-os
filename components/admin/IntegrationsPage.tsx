@@ -53,6 +53,9 @@ type IntegrationDebugDetails = {
   message: string;
   code?: string;
   field?: string;
+  prismaCode?: string;
+  prismaMeta?: unknown;
+  prismaMessage?: string;
 };
 
 type IntegrationApiErrorPayload = {
@@ -62,6 +65,11 @@ type IntegrationApiErrorPayload = {
   details?: Array<{ message?: string }>;
   code?: string;
   field?: string;
+  debug?: {
+    prismaCode?: string;
+    prismaMeta?: unknown;
+    prismaMessage?: string;
+  };
 };
 
 class IntegrationApiRequestError extends Error {
@@ -108,6 +116,16 @@ function messageFromPayload(data: IntegrationApiErrorPayload | null, fallback: s
   if (data.error && typeof data.error === "object" && data.error.message) return data.error.message;
   if (data.details?.[0]?.message) return data.details[0].message;
   return fallback;
+}
+
+function formatDebugValue(value: unknown) {
+  if (value === null || value === undefined) return "None";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 async function apiRequest<T>(url: string, options: RequestInit = {}) {
@@ -421,7 +439,10 @@ function CompanyIntegrationDrawer({
           lastRequestAt: new Date().toISOString(),
           message,
           code: apiError?.payload?.code,
-          field: apiError?.payload?.field
+          field: apiError?.payload?.field,
+          prismaCode: apiError?.payload?.debug?.prismaCode,
+          prismaMeta: apiError?.payload?.debug?.prismaMeta,
+          prismaMessage: apiError?.payload?.debug?.prismaMessage
         }
       }));
       setToast(message);
@@ -794,6 +815,13 @@ function DebugDetails({
         <p>Code: {details?.code ?? "None"}</p>
         <p>Field: {details?.field ?? "None"}</p>
         <p>Message: {details?.message ?? integration?.lastVerificationError ?? "None"}</p>
+        {details?.statusCode === 500 ? (
+          <>
+            <p>Prisma code: {details.prismaCode ?? "None"}</p>
+            <p>Prisma meta: {formatDebugValue(details.prismaMeta)}</p>
+            <p>Prisma message: {details.prismaMessage ?? "None"}</p>
+          </>
+        ) : null}
         <p>Last verified: {displayDate(integration?.lastVerifiedAt)}</p>
       </div>
     </details>
