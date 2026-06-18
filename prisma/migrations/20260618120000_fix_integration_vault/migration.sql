@@ -56,6 +56,9 @@ ALTER TABLE "Integration" ADD COLUMN IF NOT EXISTS "updatedById" TEXT;
 ALTER TABLE "Integration" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE "Integration" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
 
+-- createdById and updatedById are nullable metadata fields only.
+-- Do not add foreign keys to "User"; some production databases do not have that exact table name.
+
 DO $$
 BEGIN
   IF EXISTS (
