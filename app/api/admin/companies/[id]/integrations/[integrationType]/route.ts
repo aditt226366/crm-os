@@ -6,12 +6,13 @@ import { ApiError } from "@/lib/api";
 import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { integrationPatchSchema, parseIntegrationType } from "@/lib/validation";
 import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
-import { encryptJson, scrubSecretsFromLogs } from "@/lib/security";
+import { scrubSecretsFromLogs } from "@/lib/security";
 import { serializeIntegration } from "@/lib/serializers";
 import { writeAuditLog } from "@/lib/audit";
 import {
   defaultMaskedDisplay,
   encryptionConfigured,
+  encryptIntegrationConfig,
   maskedDisplayForConfig,
   mergeIntegrationConfig,
   normalizeSubmittedConfig,
@@ -25,9 +26,13 @@ function asJson(value: Record<string, unknown> | undefined) {
 }
 
 export async function GET(request: NextRequest, context: Context) {
+  let companyId = "unknown";
+  let rawIntegrationType = "unknown";
   try {
     const admin = await requirePlatformAdmin(request);
     const { id, integrationType: rawType } = await context.params;
+    companyId = id;
+    rawIntegrationType = rawType;
     const type = parseIntegrationType(rawType);
     const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
     if (!tenant) {
@@ -51,14 +56,22 @@ export async function GET(request: NextRequest, context: Context) {
       integration: serializeIntegration(integration)
     });
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId,
+      integrationType: rawIntegrationType
+    });
   }
 }
 
 export async function PATCH(request: NextRequest, context: Context) {
+  let companyId = "unknown";
+  let rawIntegrationType = "unknown";
   try {
     const admin = await requirePlatformAdmin(request);
     const { id, integrationType: rawType } = await context.params;
+    companyId = id;
+    rawIntegrationType = rawType;
     const type = parseIntegrationType(rawType);
     const body = integrationPatchSchema.parse(await request.json());
     const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
@@ -87,7 +100,7 @@ export async function PATCH(request: NextRequest, context: Context) {
         tenantId: id,
         type,
         status,
-        encryptedConfig: hasConfig ? encryptJson(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
         maskedDisplay: asJson(maskedDisplay),
         metadata: undefined,
         lastVerificationError: null,
@@ -96,7 +109,7 @@ export async function PATCH(request: NextRequest, context: Context) {
       },
       update: {
         status: safeIntegrationStatus(status),
-        encryptedConfig: hasConfig ? encryptJson(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
         maskedDisplay: asJson(maskedDisplay),
         lastVerificationError: status === "NOT_CONNECTED" ? null : undefined,
         updatedById: admin.id
@@ -118,6 +131,10 @@ export async function PATCH(request: NextRequest, context: Context) {
       integration: serializeIntegration(integration)
     });
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId,
+      integrationType: rawIntegrationType
+    });
   }
 }

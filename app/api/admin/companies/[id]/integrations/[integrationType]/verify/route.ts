@@ -8,10 +8,11 @@ import { parseIntegrationType, integrationPatchSchema } from "@/lib/validation";
 import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import { writeAuditLog } from "@/lib/audit";
 import { serializeIntegration } from "@/lib/serializers";
-import { encryptJson, scrubSecretsFromLogs } from "@/lib/security";
+import { scrubSecretsFromLogs } from "@/lib/security";
 import {
   defaultMaskedDisplay,
   encryptionConfigured,
+  encryptIntegrationConfig,
   maskedDisplayForConfig,
   mergeIntegrationConfig,
   readEncryptedConfig,
@@ -25,9 +26,13 @@ function asJson(value: Record<string, unknown> | undefined) {
 }
 
 export async function POST(request: NextRequest, context: Context) {
+  let companyId = "unknown";
+  let rawIntegrationType = "unknown";
   try {
     const admin = await requirePlatformAdmin(request);
     const { id, integrationType } = await context.params;
+    companyId = id;
+    rawIntegrationType = integrationType;
     const type = parseIntegrationType(integrationType);
     if (!encryptionConfigured()) {
       throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
@@ -62,7 +67,7 @@ export async function POST(request: NextRequest, context: Context) {
         tenantId: id,
         type,
         status: result.status,
-        encryptedConfig: hasConfig ? encryptJson(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
         maskedDisplay: asJson(hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay()),
         metadata: asJson(result.metadata),
         lastVerifiedAt: result.status === "CONNECTED" ? new Date() : null,
@@ -72,7 +77,7 @@ export async function POST(request: NextRequest, context: Context) {
       },
       update: {
         status: result.status,
-        encryptedConfig: hasConfig ? encryptJson(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
         maskedDisplay: asJson(hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay()),
         metadata: result.metadata === undefined ? undefined : asJson(result.metadata),
         lastVerifiedAt: result.status === "CONNECTED" ? new Date() : undefined,
@@ -109,6 +114,10 @@ export async function POST(request: NextRequest, context: Context) {
       ? integrationFailure(responseBody, { status: 400 })
       : integrationSuccess(responseBody);
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId,
+      integrationType: rawIntegrationType
+    });
   }
 }

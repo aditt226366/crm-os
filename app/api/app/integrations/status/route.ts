@@ -1,12 +1,15 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { errorResponse, json } from "@/lib/api";
+import { json } from "@/lib/api";
 import { requireActiveTenant } from "@/lib/guards";
 import { INTEGRATION_TYPES } from "@/lib/constants";
+import { integrationErrorResponse } from "@/lib/integrations/responses";
 
 export async function GET(request: NextRequest) {
+  let companyId = "unknown";
   try {
     const user = await requireActiveTenant(request);
+    companyId = user.tenantId ?? "unknown";
     const integrations = await prisma.integration.findMany({
       where: { tenantId: user.tenantId!, type: { in: [...INTEGRATION_TYPES] } },
       select: {
@@ -32,6 +35,9 @@ export async function GET(request: NextRequest) {
       })
     });
   } catch (error) {
-    return errorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId
+    });
   }
 }

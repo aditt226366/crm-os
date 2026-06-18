@@ -24,9 +24,11 @@ function lastConnectedAt(integration: {
 }
 
 export async function GET(request: NextRequest, context: Context) {
+  let companyId = "unknown";
   try {
     await requirePlatformAdmin(request);
     const { id } = await context.params;
+    companyId = id;
     const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
 
     if (!tenant) {
@@ -57,6 +59,10 @@ export async function GET(request: NextRequest, context: Context) {
       webhookUrl: webhookUrl(request)
     });
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId,
+      integrationType: "WHATSAPP_CLOUD"
+    });
   }
 }

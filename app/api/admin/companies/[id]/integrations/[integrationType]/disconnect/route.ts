@@ -13,9 +13,13 @@ import { defaultMaskedDisplay } from "@/lib/integration-vault";
 type Context = { params: Promise<{ id: string; integrationType: string }> };
 
 export async function POST(request: NextRequest, context: Context) {
+  let companyId = "unknown";
+  let rawIntegrationType = "unknown";
   try {
     const admin = await requirePlatformAdmin(request);
     const { id, integrationType } = await context.params;
+    companyId = id;
+    rawIntegrationType = integrationType;
     const type = parseIntegrationType(integrationType);
     const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
     if (!tenant) {
@@ -56,6 +60,10 @@ export async function POST(request: NextRequest, context: Context) {
       integration: serializeIntegration(integration)
     });
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId,
+      integrationType: rawIntegrationType
+    });
   }
 }

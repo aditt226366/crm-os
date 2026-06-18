@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
-import { errorResponse, json } from "@/lib/api";
+import { json } from "@/lib/api";
+import { integrationErrorResponse } from "@/lib/integrations/responses";
 import { serializeIntegration } from "@/lib/serializers";
 
 export async function GET(request: NextRequest) {
@@ -24,6 +25,8 @@ export async function GET(request: NextRequest) {
       }))
     });
   } catch (error) {
-    return errorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname
+    });
   }
 }

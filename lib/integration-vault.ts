@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { INTEGRATION_TYPES, type IntegrationStatus, type IntegrationType } from "@/lib/constants";
 import { INTEGRATION_CATALOG, integrationFields, isSecretField, isSensitiveField } from "@/lib/integration-catalog";
-import { decryptJson, maskSecret } from "@/lib/security";
+import { decryptJson, encryptJson, maskSecret } from "@/lib/security";
+import { IntegrationError } from "@/lib/integrations/types";
 
 export type IntegrationConfig = Record<string, string>;
 
@@ -51,6 +52,18 @@ export function readEncryptedConfig(encryptedConfig?: string | null): Integratio
     );
   } catch {
     return {};
+  }
+}
+
+export function encryptIntegrationConfig(config: IntegrationConfig) {
+  try {
+    return encryptJson(config);
+  } catch {
+    throw new IntegrationError(
+      "Failed to encrypt integration secrets.",
+      "INTEGRATION_ENCRYPTION_FAILED",
+      500
+    );
   }
 }
 

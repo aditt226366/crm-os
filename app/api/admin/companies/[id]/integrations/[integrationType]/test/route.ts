@@ -10,9 +10,13 @@ import { readEncryptedConfig, verifyIntegrationConfig } from "@/lib/integration-
 type Context = { params: Promise<{ id: string; integrationType: string }> };
 
 export async function POST(request: NextRequest, context: Context) {
+  let companyId = "unknown";
+  let rawIntegrationType = "unknown";
   try {
     const admin = await requirePlatformAdmin(request);
     const { id, integrationType } = await context.params;
+    companyId = id;
+    rawIntegrationType = integrationType;
     const type = parseIntegrationType(integrationType);
     const [tenant, integration, whatsappIntegration] = await Promise.all([
       prisma.tenant.findUnique({ where: { id }, select: { id: true, slug: true } }),
@@ -50,6 +54,10 @@ export async function POST(request: NextRequest, context: Context) {
       ? integrationFailure(responseBody, { status: 400 })
       : integrationSuccess(responseBody);
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId,
+      integrationType: rawIntegrationType
+    });
   }
 }

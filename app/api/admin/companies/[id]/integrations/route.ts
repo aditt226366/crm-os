@@ -10,9 +10,11 @@ import { defaultMaskedDisplay } from "@/lib/integration-vault";
 type Context = { params: Promise<{ id: string }> };
 
 export async function GET(request: NextRequest, context: Context) {
+  let companyId = "unknown";
   try {
     const admin = await requirePlatformAdmin(request);
     const { id } = await context.params;
+    companyId = id;
     const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
@@ -42,6 +44,9 @@ export async function GET(request: NextRequest, context: Context) {
       integrations: integrations.map(serializeIntegration)
     });
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId
+    });
   }
 }

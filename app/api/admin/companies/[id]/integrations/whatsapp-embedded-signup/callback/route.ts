@@ -8,8 +8,14 @@ import { ApiError } from "@/lib/api";
 import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { writeAuditLog } from "@/lib/audit";
 import { serializeIntegration } from "@/lib/serializers";
-import { encryptJson, scrubSecretsFromLogs } from "@/lib/security";
-import { encryptionConfigured, maskedDisplayForConfig, webhookUrlForTenant, type IntegrationConfig } from "@/lib/integration-vault";
+import { scrubSecretsFromLogs } from "@/lib/security";
+import {
+  encryptionConfigured,
+  encryptIntegrationConfig,
+  maskedDisplayForConfig,
+  webhookUrlForTenant,
+  type IntegrationConfig
+} from "@/lib/integration-vault";
 import { validateMetaEmbeddedSignupEnv } from "@/lib/integration-env";
 
 type Context = { params: Promise<{ id: string }> };
@@ -145,9 +151,11 @@ function statusPayload({
 }
 
 export async function POST(request: NextRequest, context: Context) {
+  let companyId = "unknown";
   try {
     const admin = await requirePlatformAdmin(request);
     const { id } = await context.params;
+    companyId = id;
     const body = callbackSchema.parse(await request.json());
     const tenant = await prisma.tenant.findUnique({
       where: { id },
@@ -185,7 +193,7 @@ export async function POST(request: NextRequest, context: Context) {
         tenantId: tenant.id,
         type: "WHATSAPP_CLOUD",
         status: "CONNECTED",
-        encryptedConfig: encryptJson(config),
+        encryptedConfig: encryptIntegrationConfig(config),
         maskedDisplay: asJson(maskedDisplay),
         metadata: asJson(metadata),
         lastVerifiedAt: new Date(),
@@ -195,7 +203,7 @@ export async function POST(request: NextRequest, context: Context) {
       },
       update: {
         status: "CONNECTED",
-        encryptedConfig: encryptJson(config),
+        encryptedConfig: encryptIntegrationConfig(config),
         maskedDisplay: asJson(maskedDisplay),
         metadata: asJson(metadata),
         lastVerifiedAt: new Date(),
@@ -232,6 +240,10 @@ export async function POST(request: NextRequest, context: Context) {
       })
     });
   } catch (error) {
-    return integrationErrorResponse(error);
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId,
+      integrationType: "WHATSAPP_CLOUD"
+    });
   }
 }

@@ -7,6 +7,32 @@ import { FeatureRecord, FeatureToggleCard } from "@/components/admin/FeatureTogg
 import { IntegrationCard, IntegrationRecord } from "@/components/admin/IntegrationCard";
 import { NeonButton } from "@/components/shared/NeonButton";
 
+type ApiErrorPayload = {
+  message?: string;
+  error?: string | { message?: string };
+  details?: Array<{ message?: string }>;
+};
+
+function messageFromPayload(data: ApiErrorPayload | null, fallback: string) {
+  if (!data) return fallback;
+  if (typeof data.message === "string" && data.message.trim()) return data.message;
+  if (typeof data.error === "string" && data.error.trim()) return data.error;
+  if (data.error && typeof data.error === "object" && data.error.message) return data.error.message;
+  if (data.details?.[0]?.message) return data.details[0].message;
+  return fallback;
+}
+
+async function integrationRequest<T>(url: string, options: RequestInit = {}) {
+  const response = await fetch(url, options);
+  const data = (await response.json().catch(() => null)) as (T & ApiErrorPayload) | null;
+
+  if (!response.ok) {
+    throw new Error(messageFromPayload(data, `Request failed with status ${response.status}`));
+  }
+
+  return data as T;
+}
+
 export function CompanyFeatureDrawer({
   company,
   onClose
@@ -72,14 +98,28 @@ export function CompanyFeatureDrawer({
   }
 
   async function testIntegration(integration: IntegrationRecord) {
-    await fetch(`/api/admin/companies/${company!.id}/integrations/${integration.type}/test`, { method: "POST" });
-    setToast(`${integration.name} test placeholder queued.`);
+    try {
+      const data = await integrationRequest<{ message?: string }>(
+        `/api/admin/companies/${company!.id}/integrations/${integration.type}/test`,
+        { method: "POST" }
+      );
+      setToast(data.message ?? `${integration.name} test completed.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : `${integration.name} test failed.`);
+    }
   }
 
   async function disconnectIntegration(integration: IntegrationRecord) {
-    await fetch(`/api/admin/companies/${company!.id}/integrations/${integration.type}/disconnect`, { method: "POST" });
-    setToast(`${integration.name} disconnected for ${company!.name}`);
-    await loadCompanyData(company!.id);
+    try {
+      const data = await integrationRequest<{ message?: string }>(
+        `/api/admin/companies/${company!.id}/integrations/${integration.type}/disconnect`,
+        { method: "POST" }
+      );
+      setToast(data.message ?? `${integration.name} disconnected for ${company!.name}`);
+      await loadCompanyData(company!.id);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : `${integration.name} disconnect failed.`);
+    }
   }
 
   return (

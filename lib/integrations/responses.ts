@@ -5,6 +5,9 @@ import { IntegrationError } from "@/lib/integrations/types";
 
 type IntegrationResponseOptions = {
   defaultMessage?: string;
+  route?: string;
+  integrationType?: string;
+  companyId?: string;
 };
 
 function prismaMessage(error: Prisma.PrismaClientKnownRequestError) {
@@ -15,6 +18,18 @@ function prismaMessage(error: Prisma.PrismaClientKnownRequestError) {
     return "Requested integration record was not found.";
   }
   return "Database request failed.";
+}
+
+function logDatabaseError(error: unknown, options: IntegrationResponseOptions) {
+  const known = error instanceof Prisma.PrismaClientKnownRequestError ? error : null;
+  console.error("[integrations.db] request failed", {
+    route: options.route,
+    integrationType: options.integrationType,
+    companyId: options.companyId,
+    errorName: error instanceof Error ? error.name : "UnknownError",
+    errorCode: known?.code,
+    errorMessage: error instanceof Error ? error.message : String(error)
+  });
 }
 
 export function integrationErrorResponse(error: unknown, options: IntegrationResponseOptions = {}) {
@@ -57,14 +72,30 @@ export function integrationErrorResponse(error: unknown, options: IntegrationRes
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     const message = prismaMessage(error);
-    console.error("[integrations.api] Prisma error", { code: error.code, message });
+    logDatabaseError(error, options);
     return json(
       {
         ok: false,
         message,
-        code: "DATABASE_ERROR"
+        code: message === "Database request failed." ? "DATABASE_REQUEST_FAILED" : error.code
       },
       { status: error.code === "P2003" || error.code === "P2025" ? 404 : 500 }
+    );
+  }
+
+  if (
+    error instanceof Prisma.PrismaClientInitializationError ||
+    error instanceof Prisma.PrismaClientUnknownRequestError ||
+    error instanceof Prisma.PrismaClientRustPanicError
+  ) {
+    logDatabaseError(error, options);
+    return json(
+      {
+        ok: false,
+        message: "Database request failed.",
+        code: "DATABASE_REQUEST_FAILED"
+      },
+      { status: 500 }
     );
   }
 
