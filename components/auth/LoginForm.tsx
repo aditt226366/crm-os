@@ -16,23 +16,46 @@ export function LoginForm({
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setLoading(true);
     setError(null);
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password })
-    });
-    const payload = (await response.json()) as {
-      redirectTo?: string;
-      error?: { message?: string };
-    };
-    setLoading(false);
-    if (!response.ok) {
-      setError(payload.error?.message ?? "Login failed");
-      return;
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+
+    try {
+      setLoading(true);
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        signal: controller.signal,
+        body: JSON.stringify({ username: username.trim(), password })
+      });
+
+      const payload = (await response.json().catch(() => null)) as {
+        redirectTo?: string;
+        error?: { message?: string };
+      } | null;
+
+      if (!response.ok) {
+        setError(
+          response.status === 401
+            ? "Invalid username or password."
+            : payload?.error?.message ?? "Login failed. Please try again."
+        );
+        return;
+      }
+
+      onSuccess(payload?.redirectTo ?? "/app/dashboard");
+    } catch (error) {
+      setError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "Login request timed out. Please try again."
+          : "Login failed. Please try again."
+      );
+    } finally {
+      window.clearTimeout(timeout);
+      setLoading(false);
     }
-    onSuccess(payload.redirectTo ?? "/app/dashboard");
   }
 
   return (

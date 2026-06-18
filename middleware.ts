@@ -4,7 +4,18 @@ import { jwtVerify } from "jose";
 const protectedAdmin = /^\/admin(?:\/|$)/;
 const protectedApp = /^\/app(?:\/|$)/;
 const accessCookie = "crm_access_token";
-const publicPaths = ["/", "/login", "/api/health", "/health"];
+const publicPaths = [
+  "/",
+  "/login",
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/auth/refresh",
+  "/api/auth/me",
+  "/api/health",
+  "/health",
+  "/_next",
+  "/favicon.ico"
+];
 
 function isPublicPath(path: string) {
   return publicPaths.some((publicPath) => {
@@ -100,5 +111,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/health|health|_next/static|_next/image|favicon.ico).*)"]
+  matcher: ["/((?!api/health|health|_next|favicon.ico).*)"]
 };
