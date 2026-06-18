@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { validateAuthEnv } from "@/lib/auth-env";
+import { ensureAuthSchema, repairAuthSchema } from "@/lib/auth-schema";
 import { loginSchema } from "@/lib/validation";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { createAccessOnlySession, createSession, setAuthCookies } from "@/lib/auth";
@@ -143,6 +144,24 @@ async function findLoginUser(username: string) {
   });
 }
 
+async function findLoginUserWithRepair(username: string) {
+  try {
+    return await findLoginUser(username);
+  } catch (error) {
+    const debug = prismaDebug(error);
+    if (debug.prismaCode !== "P2021") {
+      throw error;
+    }
+
+    console.warn("[auth.login] missing auth table during user lookup; repairing and retrying", {
+      prismaCode: debug.prismaCode,
+      prismaMeta: debug.prismaMeta
+    });
+    await repairAuthSchema();
+    return findLoginUser(username);
+  }
+}
+
 async function safeUpdateLastLogin(userId: string) {
   try {
     await prisma.user.update({
@@ -185,6 +204,7 @@ export async function loginWithRequest(request: NextRequest) {
     }
 
     console.log("[auth.login] request received");
+    await ensureAuthSchema();
 
     const ip = clientIp(request.headers);
     const limit = checkRateLimit(`login:${ip}`, 10, 60_000);
@@ -201,7 +221,7 @@ export async function loginWithRequest(request: NextRequest) {
 
     const body = loginSchema.parse(requestBody);
     const username = sanitizeText(body.username).toLowerCase();
-    const user = await findLoginUser(username);
+    const user = await findLoginUserWithRepair(username);
 
     console.log("[auth.login] user lookup", {
       username,

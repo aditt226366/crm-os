@@ -3,6 +3,7 @@ import { SignJWT, jwtVerify } from "jose";
 import type { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
+import { ensureAuthSchema } from "@/lib/auth-schema";
 import { sha256 } from "@/lib/security";
 
 const accessCookie = "access_token";
@@ -42,6 +43,7 @@ export async function verifyAccessToken(token: string) {
 }
 
 export async function getAuthUser(request: NextRequest) {
+  await ensureAuthSchema();
   const token = request.cookies.get(accessCookie)?.value;
   if (!token) {
     throw new ApiError(401, "UNAUTHENTICATED", "Authentication required");
@@ -67,6 +69,7 @@ export async function getAuthUser(request: NextRequest) {
 }
 
 export async function createRefreshToken(userId: string) {
+  await ensureAuthSchema();
   const token = crypto.randomBytes(48).toString("base64url");
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
   await prisma.refreshToken.create({
@@ -155,6 +158,7 @@ export async function revokeRefreshToken(token: string | null) {
   if (!token) {
     return;
   }
+  await ensureAuthSchema();
   await prisma.refreshToken.updateMany({
     where: {
       tokenHash: sha256(token),
@@ -168,6 +172,7 @@ export async function rotateRefreshToken(token: string | null) {
   if (!token) {
     throw new ApiError(401, "NO_REFRESH_TOKEN", "Refresh token missing");
   }
+  await ensureAuthSchema();
 
   const existing = await prisma.refreshToken.findUnique({
     where: { tokenHash: sha256(token) },
