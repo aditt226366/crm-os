@@ -66,15 +66,44 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [features, setFeatures] = useState<AppFeature[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const refreshShell = useCallback(async () => {
-    const [meResponse, featureResponse] = await Promise.all([fetch("/api/app/me"), fetch("/api/app/features")]);
-    if (!meResponse.ok || !featureResponse.ok) {
+    setError(null);
+    const authResponse = await fetch("/api/auth/me", {
+      credentials: "include",
+      cache: "no-store"
+    });
+
+    if (authResponse.status === 401) {
       window.location.href = "/login";
       return;
     }
+    if (!authResponse.ok) {
+      setError("Could not verify session. Please refresh.");
+      return;
+    }
+
+    const [meResponse, featureResponse] = await Promise.all([
+      fetch("/api/app/me", { credentials: "include", cache: "no-store" }),
+      fetch("/api/app/features", { credentials: "include", cache: "no-store" })
+    ]);
+
+    if (meResponse.status === 401 || featureResponse.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (meResponse.status === 403 || featureResponse.status === 403) {
+      setError("Workspace access is blocked. Contact platform admin.");
+      return;
+    }
+    if (!meResponse.ok || !featureResponse.ok) {
+      setError("Could not load workspace. Please refresh.");
+      return;
+    }
+
     const meData = (await meResponse.json()) as { user: AppUser };
     const featureData = (await featureResponse.json()) as { features: AppFeature[] };
     setUser(meData.user);
@@ -83,17 +112,60 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetch("/api/app/me"), fetch("/api/app/features")])
-      .then(async ([meResponse, featureResponse]) => {
-        if (!meResponse.ok || !featureResponse.ok) {
+    async function loadShell() {
+      setError(null);
+      const authResponse = await fetch("/api/auth/me", {
+        credentials: "include",
+        cache: "no-store"
+      });
+
+      if (authResponse.status === 401) {
+        if (active) {
           window.location.href = "/login";
-          return;
         }
+        return;
+      }
+      if (!authResponse.ok) {
+        if (active) setError("Could not verify session. Please refresh.");
+        return;
+      }
+
+      const authData = (await authResponse.json()) as { user?: { role?: string } };
+      if (authData.user?.role === "PLATFORM_ADMIN") {
+        if (active) {
+          window.location.href = "/admin";
+        }
+        return;
+      }
+
+      const [meResponse, featureResponse] = await Promise.all([
+        fetch("/api/app/me", { credentials: "include", cache: "no-store" }),
+        fetch("/api/app/features", { credentials: "include", cache: "no-store" })
+      ]);
+
+      if (meResponse.status === 401 || featureResponse.status === 401) {
+        if (active) window.location.href = "/login";
+        return;
+      }
+      if (meResponse.status === 403 || featureResponse.status === 403) {
+        if (active) setError("Workspace access is blocked. Contact platform admin.");
+        return;
+      }
+      if (!meResponse.ok || !featureResponse.ok) {
+        if (active) setError("Could not load workspace. Please refresh.");
+        return;
+      }
+
         const meData = (await meResponse.json()) as { user: AppUser };
         const featureData = (await featureResponse.json()) as { features: AppFeature[] };
         if (!active) return;
         setUser(meData.user);
         setFeatures(featureData.features ?? []);
+    }
+
+    loadShell()
+      .catch(() => {
+        if (active) setError("Could not verify session. Please refresh.");
       })
       .finally(() => {
         if (active) {
@@ -149,6 +221,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     return (
       <main className="min-h-screen bg-[#030712] p-6 text-white">
         <LoadingSkeleton rows={10} />
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="min-h-screen bg-[#030712] p-6 text-white">
+        <div className="mx-auto mt-24 max-w-xl rounded-2xl border border-rose-300/20 bg-rose-300/10 p-5 text-rose-100">
+          <p className="text-sm font-semibold">{error}</p>
+        </div>
       </main>
     );
   }

@@ -3,7 +3,7 @@ import { jwtVerify } from "jose";
 
 const protectedAdmin = /^\/admin(?:\/|$)/;
 const protectedApp = /^\/app(?:\/|$)/;
-const accessCookie = "crm_access_token";
+const accessCookie = "access_token";
 const publicPaths = [
   "/",
   "/login",
@@ -55,7 +55,7 @@ function corsHeaders(request: NextRequest, response: NextResponse) {
   return response;
 }
 
-async function readRole(request: NextRequest) {
+async function readSession(request: NextRequest) {
   const token = request.cookies.get(accessCookie)?.value;
   if (!token) {
     return null;
@@ -65,10 +65,21 @@ async function readRole(request: NextRequest) {
       process.env.JWT_ACCESS_SECRET ?? "local-access-secret-change-before-production-32"
     );
     const { payload } = await jwtVerify(token, secret);
-    return payload.role as string | undefined;
+    return {
+      role: payload.role as string | undefined,
+      tenantId: (payload.tenantId as string | undefined) ?? null
+    };
   } catch {
     return null;
   }
+}
+
+function logDecision(request: NextRequest, hasAccessToken: boolean, decision: string) {
+  console.log("[middleware]", {
+    path: request.nextUrl.pathname,
+    hasAccessToken,
+    decision
+  });
 }
 
 export async function middleware(request: NextRequest) {
@@ -78,35 +89,46 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
   if (isPublicPath(path)) {
+    logDecision(request, Boolean(request.cookies.get(accessCookie)?.value), "allow-public");
     return corsHeaders(request, securityHeaders(NextResponse.next()));
   }
 
-  const role = await readRole(request);
+  const hasAccessToken = Boolean(request.cookies.get(accessCookie)?.value);
+  const session = await readSession(request);
+  const role = session?.role;
 
   if (protectedAdmin.test(path) && role !== "PLATFORM_ADMIN") {
     const url = request.nextUrl.clone();
     if (role === "COMPANY_OWNER" || role === "COMPANY_AGENT") {
       url.pathname = "/app/dashboard";
       url.search = "";
+      logDecision(request, hasAccessToken, "redirect-company-to-app");
     } else {
       url.pathname = "/login";
       url.searchParams.set("next", path);
+      logDecision(request, hasAccessToken, "redirect-login");
     }
     return corsHeaders(request, securityHeaders(NextResponse.redirect(url)));
   }
 
-  if (protectedApp.test(path) && role !== "COMPANY_OWNER" && role !== "COMPANY_AGENT") {
+  if (
+    protectedApp.test(path) &&
+    (role !== "COMPANY_OWNER" && role !== "COMPANY_AGENT" || !session?.tenantId)
+  ) {
     const url = request.nextUrl.clone();
     if (role === "PLATFORM_ADMIN") {
       url.pathname = "/admin";
       url.search = "";
+      logDecision(request, hasAccessToken, "redirect-admin");
     } else {
       url.pathname = "/login";
       url.searchParams.set("next", path);
+      logDecision(request, hasAccessToken, "redirect-login");
     }
     return corsHeaders(request, securityHeaders(NextResponse.redirect(url)));
   }
 
+  logDecision(request, hasAccessToken, "allow");
   return corsHeaders(request, securityHeaders(NextResponse.next()));
 }
 

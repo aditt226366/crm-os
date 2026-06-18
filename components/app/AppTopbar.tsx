@@ -13,7 +13,7 @@ export function AppTopbar({ onOpenMobileSidebar }: { onOpenMobileSidebar: () => 
   const { user, enabledFeatureSet } = useAppShell();
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     router.push("/login");
   }
 

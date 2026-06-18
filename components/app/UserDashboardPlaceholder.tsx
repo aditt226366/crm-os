@@ -33,7 +33,10 @@ export function UserDashboardPlaceholder() {
   const enabledNavigation = getEnabledNavigation(features);
 
   useEffect(() => {
-    Promise.all([fetch("/api/app/me"), fetch("/api/app/features")])
+    Promise.all([
+      fetch("/api/app/me", { credentials: "include", cache: "no-store" }),
+      fetch("/api/app/features", { credentials: "include", cache: "no-store" })
+    ])
       .then(async ([meResponse, featureResponse]) => {
         if (!meResponse.ok || !featureResponse.ok) throw new Error("Workspace access blocked");
         const meData = (await meResponse.json()) as AppMe;
@@ -45,7 +48,7 @@ export function UserDashboardPlaceholder() {
   }, []);
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     window.location.href = "/login";
   }
 
@@ -119,4 +122,3 @@ export function UserDashboardPlaceholder() {
     </main>
   );
 }
-

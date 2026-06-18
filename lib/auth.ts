@@ -5,16 +5,20 @@ import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { sha256 } from "@/lib/security";
 
-const accessCookie = "crm_access_token";
-const refreshCookie = "crm_refresh_token";
+const accessCookie = "access_token";
+const refreshCookie = "refresh_token";
+const legacyAccessCookie = "crm_access_token";
+const legacyRefreshCookie = "crm_refresh_token";
 const accessSecret = new TextEncoder().encode(
   process.env.JWT_ACCESS_SECRET ?? "local-access-secret-change-before-production-32"
 );
 
 type AccessPayload = {
   sub: string;
+  userId: string;
   role: string;
   tenantId?: string | null;
+  username?: string | null;
 };
 
 export async function signAccessToken(payload: AccessPayload) {
@@ -28,10 +32,12 @@ export async function signAccessToken(payload: AccessPayload) {
 
 export async function verifyAccessToken(token: string) {
   const { payload } = await jwtVerify(token, accessSecret);
+  const userId = typeof payload.sub === "string" ? payload.sub : (payload.userId as string | undefined);
   return {
-    userId: payload.sub,
+    userId,
     role: payload.role as string,
-    tenantId: (payload.tenantId as string | undefined) ?? null
+    tenantId: (payload.tenantId as string | undefined) ?? null,
+    username: (payload.username as string | undefined) ?? null
   };
 }
 
@@ -77,11 +83,14 @@ export async function createSession(user: {
   id: string;
   role: string;
   tenantId: string | null;
+  username?: string | null;
 }) {
   const accessToken = await signAccessToken({
     sub: user.id,
+    userId: user.id,
     role: user.role,
-    tenantId: user.tenantId
+    tenantId: user.tenantId,
+    username: user.username ?? null
   });
   const refreshToken = await createRefreshToken(user.id);
   return { accessToken, refreshToken };
@@ -106,11 +115,15 @@ export function setAuthCookies(
     path: "/",
     maxAge: 60 * 60 * 24 * 30
   });
+  response.cookies.set(legacyAccessCookie, "", { path: "/", maxAge: 0 });
+  response.cookies.set(legacyRefreshCookie, "", { path: "/", maxAge: 0 });
 }
 
 export function clearAuthCookies(response: NextResponse) {
   response.cookies.set(accessCookie, "", { path: "/", maxAge: 0 });
   response.cookies.set(refreshCookie, "", { path: "/", maxAge: 0 });
+  response.cookies.set(legacyAccessCookie, "", { path: "/", maxAge: 0 });
+  response.cookies.set(legacyRefreshCookie, "", { path: "/", maxAge: 0 });
 }
 
 export function getRefreshCookie(request: NextRequest) {
@@ -160,7 +173,10 @@ export async function rotateRefreshToken(token: string | null) {
     data: { revokedAt: new Date() }
   });
 
-  return createSession(existing.user);
+  return {
+    ...(await createSession(existing.user)),
+    user: existing.user
+  };
 }
 
 export const authCookieNames = {

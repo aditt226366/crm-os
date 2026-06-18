@@ -7,7 +7,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { createSession, setAuthCookies } from "@/lib/auth";
 import { ApiError, json } from "@/lib/api";
 import { clientIp, sanitizeText, verifyPassword } from "@/lib/security";
-import { writeAuditLog } from "@/lib/audit";
+import { safeCreateAuditLog } from "@/lib/audit";
 
 function safeLoginErrorResponse(error: unknown) {
   if (error instanceof ApiError) {
@@ -104,7 +104,7 @@ export async function loginWithRequest(request: NextRequest) {
 
     const passwordMatches = user ? await verifyPassword(body.password, user.passwordHash) : false;
     if (!user || user.status !== "ACTIVE" || !passwordMatches) {
-      await writeAuditLog({
+      await safeCreateAuditLog({
         request,
         actorUserId: user?.id ?? null,
         tenantId: user?.tenantId ?? null,
@@ -130,7 +130,7 @@ export async function loginWithRequest(request: NextRequest) {
       data: { lastLoginAt: new Date() }
     });
 
-    await writeAuditLog({
+    await safeCreateAuditLog({
       request,
       actorUserId: user.id,
       tenantId: user.tenantId,
@@ -165,8 +165,10 @@ export async function loginWithRequest(request: NextRequest) {
 
     setAuthCookies(response, await createSession(user));
     console.log("[auth.login] success", {
+      userId: user.id,
       username,
       role: user.role,
+      tenantId: user.tenantId,
       tenantActive: user.tenant ? user.tenant.status === "ACTIVE" : null,
       redirectTo
     });

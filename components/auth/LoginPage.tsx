@@ -1,15 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { ArrowLeft, MessageCircle, ShieldCheck } from "lucide-react";
 import { AuthOrbBackground } from "@/components/visuals/AuthOrbBackground";
 import { LoginForm } from "@/components/auth/LoginForm";
 
 export function LoginPage() {
-  const router = useRouter();
-
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#030712] px-4 py-6 text-white sm:px-6 lg:px-8">
       <AuthOrbBackground />
@@ -61,7 +58,9 @@ export function LoginPage() {
                   </p>
                 </div>
               </div>
-              <LoginForm onSuccess={(redirectTo) => router.push(redirectTo)} />
+              <LoginForm onSuccess={(redirectTo) => {
+                window.location.href = redirectTo;
+              }} />
             </motion.div>
           </div>
         </section>
