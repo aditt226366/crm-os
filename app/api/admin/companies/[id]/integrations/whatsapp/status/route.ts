@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { ApiError } from "@/lib/api";
 import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { maskedDisplayForConfig, readEncryptedConfig } from "@/lib/integration-vault";
 
 type Context = { params: Promise<{ id: string }> };
@@ -37,6 +38,7 @@ export async function GET(request: NextRequest, context: Context) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
 
+    await ensureIntegrationSchema();
     const integration = await prisma.integration.findUnique({
       where: { tenantId_type: { tenantId: id, type: "WHATSAPP_CLOUD" } },
       select: {

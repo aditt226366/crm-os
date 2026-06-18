@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { databaseEnvCheck } from "@/lib/db-env";
 
 const isProductionRuntime =
   process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build";
@@ -9,7 +10,18 @@ if (isProductionRuntime && !process.env.DATABASE_URL) {
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
+  prismaDbEnvLogged?: boolean;
 };
+
+if (isProductionRuntime && !globalForPrisma.prismaDbEnvLogged) {
+  const env = databaseEnvCheck();
+  console.log("[db.env]", {
+    hasDatabaseUrl: env.hasDatabaseUrl,
+    databaseUrlHost: env.databaseHostMasked,
+    databaseUserPrefix: env.databaseUserMasked
+  });
+  globalForPrisma.prismaDbEnvLogged = true;
+}
 
 export const prisma =
   globalForPrisma.prisma ??

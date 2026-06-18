@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 
 export async function GET(request: NextRequest) {
   let includeDebug = false;
@@ -9,6 +10,7 @@ export async function GET(request: NextRequest) {
   try {
     const admin = await requirePlatformAdmin(request);
     includeDebug = admin.role === "PLATFORM_ADMIN";
+    await ensureIntegrationSchema();
 
     const [integrations, auditLogs] = await Promise.all([
       prisma.integration.findMany({ take: 1 }),

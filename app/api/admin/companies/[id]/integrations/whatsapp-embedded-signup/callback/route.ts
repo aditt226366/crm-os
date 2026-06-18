@@ -7,6 +7,7 @@ import { requirePlatformAdmin } from "@/lib/guards";
 import { ApiError } from "@/lib/api";
 import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { safeCreateAuditLog } from "@/lib/audit";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { serializeIntegration } from "@/lib/serializers";
 import { scrubSecretsFromLogs } from "@/lib/security";
 import {
@@ -171,6 +172,7 @@ export async function POST(request: NextRequest, context: Context) {
       throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
     }
 
+    await ensureIntegrationSchema();
     const accessToken = await exchangeCodeForAccessToken(body.code);
     const config: IntegrationConfig = {
       WHATSAPP_BUSINESS_ACCOUNT_ID: body.wabaId,

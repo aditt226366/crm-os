@@ -5,6 +5,7 @@ import { ApiError } from "@/lib/api";
 import { integrationErrorResponse, integrationSuccess } from "@/lib/integrations/responses";
 import { INTEGRATION_TYPES } from "@/lib/constants";
 import { serializeIntegration } from "@/lib/serializers";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
 
 type Context = { params: Promise<{ id: string }> };
@@ -21,6 +22,7 @@ export async function GET(request: NextRequest, context: Context) {
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
+    await ensureIntegrationSchema();
     await Promise.all(
       INTEGRATION_TYPES.map((type) =>
         prisma.integration.upsert({

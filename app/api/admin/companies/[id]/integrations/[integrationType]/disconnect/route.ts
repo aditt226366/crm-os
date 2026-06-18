@@ -8,6 +8,7 @@ import { parseIntegrationType } from "@/lib/validation";
 import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import { serializeIntegration } from "@/lib/serializers";
 import { safeCreateAuditLog } from "@/lib/audit";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
 
 type Context = { params: Promise<{ id: string; integrationType: string }> };
@@ -27,6 +28,7 @@ export async function POST(request: NextRequest, context: Context) {
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
+    await ensureIntegrationSchema();
     const integration = await prisma.integration.upsert({
       where: { tenantId_type: { tenantId: id, type } },
       create: {

@@ -17,6 +17,7 @@ import {
   TestTube2,
   Unplug,
   Upload,
+  Wrench,
   X
 } from "lucide-react";
 import { INTEGRATION_TYPES, type IntegrationType } from "@/lib/constants";
@@ -163,6 +164,11 @@ async function apiRequest<T>(url: string, options: RequestInit = {}) {
   return { data: data as T, statusCode: response.status };
 }
 
+async function fetchCompanyIntegrations(companyId: string) {
+  const { data } = await apiRequest<{ integrations: IntegrationRecord[] }>(`/api/admin/companies/${companyId}/integrations`);
+  return data.integrations ?? [];
+}
+
 export function IntegrationsPage() {
   const [companies, setCompanies] = useState<IntegrationCompanySummary[]>([]);
   const [selected, setSelected] = useState<IntegrationCompanySummary | null>(null);
@@ -296,6 +302,7 @@ function CompanyIntegrationDrawer({
   const [formValues, setFormValues] = useState<FormValues>({});
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [repairingDb, setRepairingDb] = useState(false);
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
   const [debugDetails, setDebugDetails] = useState<Record<IntegrationType, IntegrationDebugDetails | null>>({} as Record<IntegrationType, IntegrationDebugDetails | null>);
   const companyId = company?.id;
@@ -305,11 +312,11 @@ function CompanyIntegrationDrawer({
     if (!companyId) return;
     let active = true;
 
-    apiRequest<{ integrations: IntegrationRecord[] }>(`/api/admin/companies/${companyId}/integrations`)
-      .then(({ data }) => {
+    fetchCompanyIntegrations(companyId)
+      .then((nextIntegrations) => {
         if (!active) return;
-        setIntegrations(data.integrations ?? []);
-        setFormValues(buildVisibleDefaults(data.integrations ?? []));
+        setIntegrations(nextIntegrations);
+        setFormValues(buildVisibleDefaults(nextIntegrations));
       })
       .catch((error: unknown) => {
         if (active) {
@@ -324,6 +331,25 @@ function CompanyIntegrationDrawer({
       active = false;
     };
   }, [companyId]);
+
+  async function repairIntegrationDb() {
+    if (!company) return;
+    setRepairingDb(true);
+    setToast(null);
+
+    try {
+      const { data } = await apiRequest<{ message?: string }>("/api/admin/db-repair/integration", { method: "POST" });
+      const nextIntegrations = await fetchCompanyIntegrations(company.id);
+      setIntegrations(nextIntegrations);
+      setFormValues(buildVisibleDefaults(nextIntegrations));
+      setToast(data.message ?? "Integration database repaired.");
+      onChanged();
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Integration database repair failed.");
+    } finally {
+      setRepairingDb(false);
+    }
+  }
 
   function updateFormValue(type: IntegrationType, field: string, value: string) {
     setFormValues((current) => ({
@@ -483,22 +509,28 @@ function CompanyIntegrationDrawer({
               </button>
             </div>
 
-            <div className="mt-6 inline-flex rounded-full border border-white/10 bg-white/[0.04] p-1">
-              {[
-                ["integrations", "Integrations"],
-                ["logs", "Verification Logs"]
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  onClick={() => setTab(value as "integrations" | "logs")}
-                  className={cn(
-                    "rounded-full px-4 py-2 text-sm font-semibold transition",
-                    tab === value ? "bg-cyan-300 text-slate-950" : "text-slate-300 hover:text-white"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+              <div className="inline-flex rounded-full border border-white/10 bg-white/[0.04] p-1">
+                {[
+                  ["integrations", "Integrations"],
+                  ["logs", "Verification Logs"]
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => setTab(value as "integrations" | "logs")}
+                    className={cn(
+                      "rounded-full px-4 py-2 text-sm font-semibold transition",
+                      tab === value ? "bg-cyan-300 text-slate-950" : "text-slate-300 hover:text-white"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <NeonButton size="sm" variant="secondary" loading={repairingDb} onClick={repairIntegrationDb}>
+                <Wrench className="h-3.5 w-3.5" />
+                Repair Integration DB
+              </NeonButton>
             </div>
 
             {toast ? <p className="mt-5 rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-4 py-3 text-sm text-cyan-100">{toast}</p> : null}

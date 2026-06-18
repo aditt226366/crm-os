@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { json } from "@/lib/api";
 import { integrationErrorResponse } from "@/lib/integrations/responses";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { TOTAL_INTEGRATIONS } from "@/lib/integration-vault";
 
 function serializeCompany(tenant: {
@@ -49,6 +50,7 @@ export async function GET(request: NextRequest) {
   try {
     const admin = await requirePlatformAdmin(request);
     includeDebug = admin.role === "PLATFORM_ADMIN";
+    await ensureIntegrationSchema();
     const tenants = await prisma.tenant.findMany({
       orderBy: { createdAt: "desc" },
       include: {

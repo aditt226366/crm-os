@@ -9,6 +9,7 @@ import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import { scrubSecretsFromLogs } from "@/lib/security";
 import { serializeIntegration } from "@/lib/serializers";
 import { safeCreateAuditLog } from "@/lib/audit";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import {
   defaultMaskedDisplay,
   encryptionConfigured,
@@ -46,6 +47,7 @@ export async function GET(request: NextRequest, context: Context) {
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
+    await ensureIntegrationSchema();
     const integration = await prisma.integration.upsert({
       where: { tenantId_type: { tenantId, type } },
       create: {
@@ -94,6 +96,7 @@ export async function PATCH(request: NextRequest, context: Context) {
     if (!encryptionConfigured()) {
       throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
     }
+    await ensureIntegrationSchema();
     const oldValue = await prisma.integration.findUnique({
       where: { tenantId_type: { tenantId, type } },
       select: { id: true, status: true, maskedDisplay: true, metadata: true, encryptedConfig: true }

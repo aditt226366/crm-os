@@ -9,6 +9,7 @@ import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { serializeIntegration } from "@/lib/serializers";
 import { scrubSecretsFromLogs } from "@/lib/security";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import {
   defaultMaskedDisplay,
   encryptionConfigured,
@@ -46,6 +47,7 @@ export async function POST(request: NextRequest, context: Context) {
     if (!encryptionConfigured()) {
       throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
     }
+    await ensureIntegrationSchema();
     const [currentIntegration, whatsappIntegration] = await Promise.all([
       prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type } } }),
       prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } } })
