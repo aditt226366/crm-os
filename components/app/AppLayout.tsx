@@ -22,7 +22,9 @@ type AppUser = {
   id: string;
   name: string;
   email: string;
+  username?: string;
   role: string;
+  tenantId?: string | null;
   tenant: {
     id: string;
     name: string;
@@ -35,6 +37,23 @@ type AppUser = {
     phoneNumber: string | null;
     lastSyncAt: string | null;
   };
+};
+
+type AuthMeUser = {
+  id: string;
+  name?: string;
+  email?: string;
+  username?: string;
+  role: string;
+  tenantId?: string | null;
+  tenant?: AppUser["tenant"];
+};
+
+type WorkspaceMeResponse = {
+  ok?: boolean;
+  warning?: string;
+  user?: Partial<AppUser> & { tenant?: AppUser["tenant"] };
+  tenant?: AppUser["tenant"];
 };
 
 type AppNavigationItem = {
@@ -54,6 +73,44 @@ type AppShellContextValue = {
 
 const AppShellContext = createContext<AppShellContextValue | null>(null);
 
+function fallbackTenant(authUser: AuthMeUser): NonNullable<AppUser["tenant"]> {
+  return {
+    id: authUser.tenant?.id ?? authUser.tenantId ?? "workspace",
+    name: authUser.tenant?.name ?? "Printwear",
+    slug: authUser.tenant?.slug ?? "workspace",
+    plan: authUser.tenant?.plan ?? "STARTER",
+    status: authUser.tenant?.status ?? "ACTIVE"
+  };
+}
+
+function fallbackUser(authUser: AuthMeUser): AppUser {
+  return {
+    id: authUser.id,
+    name: authUser.name ?? authUser.username ?? "Workspace user",
+    email: authUser.email ?? "",
+    username: authUser.username,
+    role: authUser.role,
+    tenantId: authUser.tenantId ?? authUser.tenant?.id ?? null,
+    tenant: fallbackTenant(authUser),
+    whatsapp: {
+      status: "NOT_CONNECTED",
+      phoneNumber: null,
+      lastSyncAt: null
+    }
+  };
+}
+
+function workspaceUserFromResponse(data: WorkspaceMeResponse, authUser: AuthMeUser): AppUser {
+  const base = fallbackUser(authUser);
+  const tenant = data.tenant ?? data.user?.tenant ?? base.tenant;
+  return {
+    ...base,
+    ...data.user,
+    tenant,
+    whatsapp: data.user?.whatsapp ?? base.whatsapp
+  };
+}
+
 export function useAppShell() {
   const context = useContext(AppShellContext);
   if (!context) {
@@ -67,11 +124,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [features, setFeatures] = useState<AppFeature[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [workspaceWarning, setWorkspaceWarning] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const refreshShell = useCallback(async () => {
     setError(null);
+    setWorkspaceWarning(null);
     const authResponse = await fetch("/api/auth/me", {
       credentials: "include",
       cache: "no-store"
@@ -85,6 +144,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       setError("Could not verify session. Please refresh.");
       return;
     }
+    const authData = (await authResponse.json()) as { user?: AuthMeUser };
+    if (!authData.user) {
+      setError("Could not verify session. Please refresh.");
+      return;
+    }
 
     const [meResponse, featureResponse] = await Promise.all([
       fetch("/api/app/me", { credentials: "include", cache: "no-store" }),
@@ -95,18 +159,27 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       window.location.href = "/login";
       return;
     }
-    if (meResponse.status === 403 || featureResponse.status === 403) {
+    if (featureResponse.status === 403) {
       setError("Workspace access is blocked. Contact platform admin.");
       return;
     }
-    if (!meResponse.ok || !featureResponse.ok) {
-      setError("Could not load workspace. Please refresh.");
-      return;
+
+    let nextUser = fallbackUser(authData.user);
+    if (meResponse.ok) {
+      const meData = (await meResponse.json()) as WorkspaceMeResponse;
+      nextUser = workspaceUserFromResponse(meData, authData.user);
+      setWorkspaceWarning(meData.warning ?? null);
+    } else {
+      setWorkspaceWarning("Workspace details could not fully load.");
     }
 
-    const meData = (await meResponse.json()) as { user: AppUser };
-    const featureData = (await featureResponse.json()) as { features: AppFeature[] };
-    setUser(meData.user);
+    const featureData = featureResponse.ok
+      ? ((await featureResponse.json()) as { features: AppFeature[] })
+      : { features: [] };
+    if (!featureResponse.ok) {
+      setWorkspaceWarning("Workspace details could not fully load.");
+    }
+    setUser(nextUser);
     setFeatures(featureData.features ?? []);
   }, []);
 
@@ -114,6 +187,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     let active = true;
     async function loadShell() {
       setError(null);
+      setWorkspaceWarning(null);
       const authResponse = await fetch("/api/auth/me", {
         credentials: "include",
         cache: "no-store"
@@ -130,11 +204,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const authData = (await authResponse.json()) as { user?: { role?: string } };
+      const authData = (await authResponse.json()) as { user?: AuthMeUser };
       if (authData.user?.role === "PLATFORM_ADMIN") {
         if (active) {
           window.location.href = "/admin";
         }
+        return;
+      }
+      if (!authData.user) {
+        if (active) setError("Could not verify session. Please refresh.");
         return;
       }
 
@@ -147,20 +225,30 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         if (active) window.location.href = "/login";
         return;
       }
-      if (meResponse.status === 403 || featureResponse.status === 403) {
+      if (featureResponse.status === 403) {
         if (active) setError("Workspace access is blocked. Contact platform admin.");
         return;
       }
-      if (!meResponse.ok || !featureResponse.ok) {
-        if (active) setError("Could not load workspace. Please refresh.");
-        return;
+
+      let nextUser = fallbackUser(authData.user);
+      if (meResponse.ok) {
+        const meData = (await meResponse.json()) as WorkspaceMeResponse;
+        nextUser = workspaceUserFromResponse(meData, authData.user);
+        if (active) setWorkspaceWarning(meData.warning ?? null);
+      } else if (active) {
+        setWorkspaceWarning("Workspace details could not fully load.");
       }
 
-        const meData = (await meResponse.json()) as { user: AppUser };
-        const featureData = (await featureResponse.json()) as { features: AppFeature[] };
-        if (!active) return;
-        setUser(meData.user);
-        setFeatures(featureData.features ?? []);
+      const featureData = featureResponse.ok
+        ? ((await featureResponse.json()) as { features: AppFeature[] })
+        : { features: [] };
+      if (!featureResponse.ok && active) {
+        setWorkspaceWarning("Workspace details could not fully load.");
+      }
+
+      if (!active) return;
+      setUser(nextUser);
+      setFeatures(featureData.features ?? []);
     }
 
     loadShell()
@@ -249,6 +337,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           />
           <div className="min-w-0 flex-1">
             <AppTopbar onOpenMobileSidebar={() => setMobileOpen(true)} />
+            {workspaceWarning ? (
+              <div className="border-b border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm text-amber-100 sm:px-6">
+                {workspaceWarning}
+              </div>
+            ) : null}
             <motion.main
               key="app-main"
               initial={{ opacity: 0, y: 10 }}

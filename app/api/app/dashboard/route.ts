@@ -11,10 +11,72 @@ function percent(part: number, total: number) {
   return Math.round((part / total) * 1000) / 10;
 }
 
+function emptyDashboardPayload(warning?: string) {
+  return {
+    ok: true,
+    ...(warning ? { warning } : {}),
+    metrics: {
+      totalLeads: 0,
+      hotLeads: 0,
+      warmLeads: 0,
+      scrapLeads: 0,
+      newConversationsToday: 0,
+      openConversations: 0,
+      humanQueueCount: 0,
+      ordersCaptured: 0,
+      activeCampaigns: 0,
+      broadcastsSent: 0,
+      messagesSent: 0,
+      deliveryRate: 0,
+      readRate: 0,
+      replyRate: 0,
+      failedMessages: 0,
+      estimatedApiCost: 0
+    },
+    charts: {
+      leadFunnel: [
+        { label: "Scrap", value: 0 },
+        { label: "Warm", value: 0 },
+        { label: "Hot", value: 0 },
+        { label: "Order", value: 0 }
+      ],
+      messageStatus: [
+        { label: "Sent", value: 0 },
+        { label: "Delivered", value: 0 },
+        { label: "Read", value: 0 },
+        { label: "Failed", value: 0 }
+      ],
+      topLeadSources: [],
+      handling: [
+        { label: "AI handled", value: 0 },
+        { label: "Human handled", value: 0 }
+      ],
+      campaignPerformance: []
+    },
+    recent: {
+      conversations: [],
+      orders: [],
+      humanQueue: [],
+      broadcasts: [],
+      campaigns: []
+    }
+  };
+}
+
+function logDashboardError(error: unknown) {
+  const details = error as { code?: unknown; meta?: unknown; message?: unknown };
+  console.error("[app.dashboard] failed", {
+    prismaCode: typeof details.code === "string" ? details.code : undefined,
+    prismaMeta: details.meta,
+    message: typeof details.message === "string" ? details.message : String(error)
+  });
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = await requireActiveTenant(request);
     const tenantId = user.tenantId!;
+    try {
     const now = new Date();
     const today = new Date(now);
     today.setHours(0, 0, 0, 0);
@@ -204,6 +266,10 @@ export async function GET(request: NextRequest) {
         }))
       }
     });
+    } catch (error) {
+      logDashboardError(error);
+      return json(emptyDashboardPayload("Dashboard metrics could not fully load."));
+    }
   } catch (error) {
     return errorResponse(error);
   }
