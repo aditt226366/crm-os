@@ -43,6 +43,8 @@ CORS_ORIGIN=
 
 If using Supabase, `DATABASE_URL` can be the pooled/runtime URL, but `DIRECT_URL` must be the direct Supabase DB URL from Supabase -> Connect -> Direct connection. If direct connection is unreachable from the host, use the Supabase session pooler as a fallback, not the transaction pooler.
 
+If production shows Prisma `P3018` for `20260618120000_fix_integration_vault` and then `P3009` on restart, see `DEPLOYMENT_NOTES.md` for the one-time migration recovery command. Do not run `migrate reset` in production.
+
 Then initialize Prisma:
 
 ```bash

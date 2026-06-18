@@ -37,7 +37,7 @@ export async function POST(request: NextRequest, context: Context) {
       },
       update: {
         status: "NOT_CONNECTED",
-        encryptedConfig: null,
+        encryptedConfig: Prisma.DbNull,
         maskedDisplay: defaultMaskedDisplay(),
         metadata: Prisma.JsonNull,
         lastVerifiedAt: null,

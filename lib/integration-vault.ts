@@ -40,8 +40,8 @@ export function encryptionConfigured() {
   return Boolean(process.env.ENCRYPTION_KEY?.trim());
 }
 
-export function readEncryptedConfig(encryptedConfig?: string | null): IntegrationConfig {
-  if (!encryptedConfig) {
+export function readEncryptedConfig(encryptedConfig?: unknown): IntegrationConfig {
+  if (typeof encryptedConfig !== "string" || !encryptedConfig.trim()) {
     return {};
   }
 
@@ -103,7 +103,7 @@ export function mergeIntegrationConfig({
   submittedConfig
 }: {
   type: IntegrationType;
-  encryptedConfig?: string | null;
+  encryptedConfig?: unknown;
   submittedConfig?: Record<string, unknown>;
 }) {
   return {

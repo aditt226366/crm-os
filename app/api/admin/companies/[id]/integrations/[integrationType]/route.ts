@@ -100,7 +100,7 @@ export async function PATCH(request: NextRequest, context: Context) {
         tenantId: id,
         type,
         status,
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
         maskedDisplay: asJson(maskedDisplay),
         metadata: undefined,
         lastVerificationError: null,
@@ -109,7 +109,7 @@ export async function PATCH(request: NextRequest, context: Context) {
       },
       update: {
         status: safeIntegrationStatus(status),
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
         maskedDisplay: asJson(maskedDisplay),
         lastVerificationError: status === "NOT_CONNECTED" ? null : undefined,
         updatedById: admin.id

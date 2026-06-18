@@ -115,7 +115,7 @@ async function seedIntegrations(tenantId: string, adminId: string, connected: In
           tenantId,
           type,
           status: isConnected ? "CONNECTED" : "NOT_CONNECTED",
-          encryptedConfig: isConnected ? encryptJson(config) : null,
+          encryptedConfig: isConnected ? encryptJson(config) : Prisma.DbNull,
           maskedDisplay: isConnected ? connectedDisplay : { status: "not connected" },
           metadata: isConnected ? { demo: true, provider: type.toLowerCase() } : Prisma.JsonNull,
           lastVerifiedAt: isConnected ? new Date(Date.now() - 1000 * 60 * 60 * 48) : null,
@@ -124,7 +124,7 @@ async function seedIntegrations(tenantId: string, adminId: string, connected: In
         },
         update: {
           status: isConnected ? "CONNECTED" : "NOT_CONNECTED",
-          encryptedConfig: isConnected ? encryptJson(config) : null,
+          encryptedConfig: isConnected ? encryptJson(config) : Prisma.DbNull,
           maskedDisplay: isConnected ? connectedDisplay : { status: "not connected" },
           metadata: isConnected ? { demo: true, provider: type.toLowerCase() } : Prisma.JsonNull,
           lastVerifiedAt: isConnected ? new Date(Date.now() - 1000 * 60 * 60 * 48) : null,

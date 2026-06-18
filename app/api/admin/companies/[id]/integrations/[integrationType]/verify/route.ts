@@ -67,7 +67,7 @@ export async function POST(request: NextRequest, context: Context) {
         tenantId: id,
         type,
         status: result.status,
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
         maskedDisplay: asJson(hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay()),
         metadata: asJson(result.metadata),
         lastVerifiedAt: result.status === "CONNECTED" ? new Date() : null,
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest, context: Context) {
       },
       update: {
         status: result.status,
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : null,
+        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
         maskedDisplay: asJson(hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay()),
         metadata: result.metadata === undefined ? undefined : asJson(result.metadata),
         lastVerifiedAt: result.status === "CONNECTED" ? new Date() : undefined,

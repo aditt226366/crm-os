@@ -308,7 +308,7 @@ model Integration {
   tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   type            IntegrationType
   status          IntegrationStatus @default(NOT_CONNECTED)
-  encryptedConfig String?
+  encryptedConfig Json?
   maskedDisplay   Json?
   metadata        Json?
   lastVerifiedAt  DateTime?
