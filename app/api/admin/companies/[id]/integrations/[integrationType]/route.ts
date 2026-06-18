@@ -25,6 +25,10 @@ function asJson(value: Record<string, unknown> | undefined) {
   return value as Prisma.InputJsonValue | undefined;
 }
 
+function nullableJson(value: unknown) {
+  return value === null || value === undefined ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
+}
+
 export async function GET(request: NextRequest, context: Context) {
   let companyId = "unknown";
   let rawIntegrationType = "unknown";
@@ -33,19 +37,22 @@ export async function GET(request: NextRequest, context: Context) {
     const { id, integrationType: rawType } = await context.params;
     companyId = id;
     rawIntegrationType = rawType;
+    const tenantId = id;
+    const adminUserId = admin.id;
     const type = parseIntegrationType(rawType);
-    const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
     const integration = await prisma.integration.upsert({
-      where: { tenantId_type: { tenantId: id, type } },
+      where: { tenantId_type: { tenantId, type } },
       create: {
-        tenantId: id,
+        tenantId,
         type,
         status: "NOT_CONNECTED",
         maskedDisplay: defaultMaskedDisplay(),
-        createdById: admin.id
+        createdById: adminUserId,
+        updatedById: adminUserId
       },
       update: {}
     });
@@ -71,9 +78,11 @@ export async function PATCH(request: NextRequest, context: Context) {
     const { id, integrationType: rawType } = await context.params;
     companyId = id;
     rawIntegrationType = rawType;
+    const tenantId = id;
+    const adminUserId = admin.id;
     const type = parseIntegrationType(rawType);
     const body = integrationPatchSchema.parse(await request.json());
-    const tenant = await prisma.tenant.findUnique({ where: { id }, select: { id: true } });
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
@@ -81,7 +90,7 @@ export async function PATCH(request: NextRequest, context: Context) {
       throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
     }
     const oldValue = await prisma.integration.findUnique({
-      where: { tenantId_type: { tenantId: id, type } },
+      where: { tenantId_type: { tenantId, type } },
       select: { id: true, status: true, maskedDisplay: true, metadata: true, encryptedConfig: true }
     });
     const submittedConfig = normalizeSubmittedConfig(type, body.config);
@@ -91,33 +100,40 @@ export async function PATCH(request: NextRequest, context: Context) {
       submittedConfig
     });
     const hasConfig = Object.keys(mergedConfig).length > 0;
-    const status = body.status ?? (hasConfig ? "PARTIALLY_CONNECTED" : "NOT_CONNECTED");
+    const status = safeIntegrationStatus(body.status ?? (hasConfig ? "PARTIALLY_CONNECTED" : "NOT_CONNECTED"));
     const maskedDisplay = hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay();
+    const encryptedConfig = hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull;
+    const metadata = nullableJson(oldValue?.metadata);
+    const lastVerifiedAt = status === "CONNECTED" ? new Date() : null;
+    const lastVerificationError = null;
     const integration = await prisma.integration.upsert({
-      where: { tenantId_type: { tenantId: id, type } },
+      where: { tenantId_type: { tenantId, type } },
       create: {
-        tenantId: id,
+        tenantId,
         type,
         status,
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
+        encryptedConfig,
         maskedDisplay: asJson(maskedDisplay),
-        metadata: undefined,
-        lastVerificationError: null,
-        createdById: admin.id,
-        updatedById: admin.id
+        metadata,
+        lastVerifiedAt,
+        lastVerificationError,
+        createdById: adminUserId,
+        updatedById: adminUserId
       },
       update: {
-        status: safeIntegrationStatus(status),
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
+        status,
+        encryptedConfig,
         maskedDisplay: asJson(maskedDisplay),
-        lastVerificationError: status === "NOT_CONNECTED" ? null : undefined,
-        updatedById: admin.id
+        metadata,
+        lastVerifiedAt,
+        lastVerificationError,
+        updatedById: adminUserId
       }
     });
     await writeAuditLog({
       request,
-      actorUserId: admin.id,
-      tenantId: id,
+      actorUserId: adminUserId,
+      tenantId,
       action: "admin.integration_saved",
       entityType: "Integration",
       entityId: integration.id,

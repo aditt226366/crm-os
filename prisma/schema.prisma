@@ -301,20 +301,21 @@ model TenantFeature {
 }
 
 model Integration {
-  id              String            @id @default(cuid())
-  tenantId        String
-  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  type            IntegrationType
-  status          IntegrationStatus @default(NOT_CONNECTED)
-  encryptedConfig Json?
-  maskedDisplay   Json?
-  metadata        Json?
-  lastVerifiedAt  DateTime?
+  id                    String            @id @default(cuid())
+  tenantId              String
+  type                  IntegrationType
+  status                IntegrationStatus @default(NOT_CONNECTED)
+  encryptedConfig       Json?
+  maskedDisplay         Json?
+  metadata              Json?
+  lastVerifiedAt        DateTime?
   lastVerificationError String?
-  createdById     String?
-  updatedById     String?
-  updatedAt       DateTime          @updatedAt
-  createdAt       DateTime          @default(now())
+  createdById           String?
+  updatedById           String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, type])
   @@index([tenantId])

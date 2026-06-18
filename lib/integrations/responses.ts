@@ -10,25 +10,27 @@ type IntegrationResponseOptions = {
   companyId?: string;
 };
 
-function prismaMessage(error: Prisma.PrismaClientKnownRequestError) {
-  if (error.code === "P2003") {
-    return "Company not found.";
-  }
-  if (error.code === "P2025") {
-    return "Requested integration record was not found.";
-  }
-  return "Database request failed.";
+function databaseMessage(error: unknown) {
+  const code =
+    error instanceof Prisma.PrismaClientKnownRequestError
+      ? error.code
+      : undefined;
+  return code ? `Database request failed: ${code}` : "Database request failed.";
 }
 
 function logDatabaseError(error: unknown, options: IntegrationResponseOptions) {
-  const known = error instanceof Prisma.PrismaClientKnownRequestError ? error : null;
-  console.error("[integrations.db] request failed", {
-    route: options.route,
+  const details = error as { name?: unknown; code?: unknown; message?: unknown };
+  console.error("[integrations.db] failed", {
     integrationType: options.integrationType,
     companyId: options.companyId,
-    errorName: error instanceof Error ? error.name : "UnknownError",
-    errorCode: known?.code,
-    errorMessage: error instanceof Error ? error.message : String(error)
+    errorName: typeof details.name === "string" ? details.name : error instanceof Error ? error.name : "UnknownError",
+    errorCode:
+      error instanceof Prisma.PrismaClientKnownRequestError
+        ? error.code
+        : typeof details.code === "string"
+          ? details.code
+          : undefined,
+    errorMessage: typeof details.message === "string" ? details.message : String(error)
   });
 }
 
@@ -71,15 +73,14 @@ export function integrationErrorResponse(error: unknown, options: IntegrationRes
   }
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    const message = prismaMessage(error);
     logDatabaseError(error, options);
     return json(
       {
         ok: false,
-        message,
-        code: message === "Database request failed." ? "DATABASE_REQUEST_FAILED" : error.code
+        code: "DATABASE_REQUEST_FAILED",
+        message: databaseMessage(error)
       },
-      { status: error.code === "P2003" || error.code === "P2025" ? 404 : 500 }
+      { status: 500 }
     );
   }
 
@@ -92,8 +93,8 @@ export function integrationErrorResponse(error: unknown, options: IntegrationRes
     return json(
       {
         ok: false,
-        message: "Database request failed.",
-        code: "DATABASE_REQUEST_FAILED"
+        code: "DATABASE_REQUEST_FAILED",
+        message: databaseMessage(error)
       },
       { status: 500 }
     );

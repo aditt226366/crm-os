@@ -33,19 +33,21 @@ export async function POST(request: NextRequest, context: Context) {
     const { id, integrationType } = await context.params;
     companyId = id;
     rawIntegrationType = integrationType;
+    const tenantId = id;
+    const adminUserId = admin.id;
     const type = parseIntegrationType(integrationType);
-    if (!encryptionConfigured()) {
-      throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
-    }
     const body = integrationPatchSchema.parse(await request.json().catch(() => ({})));
-    const [tenant, currentIntegration, whatsappIntegration] = await Promise.all([
-      prisma.tenant.findUnique({ where: { id }, select: { id: true, slug: true } }),
-      prisma.integration.findUnique({ where: { tenantId_type: { tenantId: id, type } } }),
-      prisma.integration.findUnique({ where: { tenantId_type: { tenantId: id, type: "WHATSAPP_CLOUD" } } })
-    ]);
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true, slug: true } });
     if (!tenant) {
       throw new ApiError(404, "COMPANY_NOT_FOUND", "Company not found.");
     }
+    if (!encryptionConfigured()) {
+      throw new ApiError(500, "ENCRYPTION_NOT_CONFIGURED", "Server encryption is not configured.");
+    }
+    const [currentIntegration, whatsappIntegration] = await Promise.all([
+      prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type } } }),
+      prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } } })
+    ]);
 
     const mergedConfig = mergeIntegrationConfig({
       type,
@@ -53,7 +55,7 @@ export async function POST(request: NextRequest, context: Context) {
       submittedConfig: body.config
     });
     const result = await verifyIntegrationConfig(type, mergedConfig, {
-      tenantId: id,
+      tenantId,
       tenantSlug: tenant?.slug,
       origin: request.nextUrl.origin,
       dependencies: {
@@ -61,35 +63,40 @@ export async function POST(request: NextRequest, context: Context) {
       }
     });
     const hasConfig = Object.keys(mergedConfig).length > 0;
+    const encryptedConfig = hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull;
+    const maskedDisplay = asJson(hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay());
+    const metadata = result.metadata === undefined ? Prisma.JsonNull : asJson(result.metadata);
+    const lastVerifiedAt = result.status === "CONNECTED" ? new Date() : null;
+    const lastVerificationError = result.status === "ERROR" ? result.message : null;
     const integration = await prisma.integration.upsert({
-      where: { tenantId_type: { tenantId: id, type } },
+      where: { tenantId_type: { tenantId, type } },
       create: {
-        tenantId: id,
+        tenantId,
         type,
         status: result.status,
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
-        maskedDisplay: asJson(hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay()),
-        metadata: asJson(result.metadata),
-        lastVerifiedAt: result.status === "CONNECTED" ? new Date() : null,
-        lastVerificationError: result.status === "ERROR" ? result.message : null,
-        createdById: admin.id,
-        updatedById: admin.id
+        encryptedConfig,
+        maskedDisplay,
+        metadata,
+        lastVerifiedAt,
+        lastVerificationError,
+        createdById: adminUserId,
+        updatedById: adminUserId
       },
       update: {
         status: result.status,
-        encryptedConfig: hasConfig ? encryptIntegrationConfig(mergedConfig) : Prisma.DbNull,
-        maskedDisplay: asJson(hasConfig ? maskedDisplayForConfig(type, mergedConfig) : defaultMaskedDisplay()),
-        metadata: result.metadata === undefined ? undefined : asJson(result.metadata),
-        lastVerifiedAt: result.status === "CONNECTED" ? new Date() : undefined,
-        lastVerificationError: result.status === "ERROR" ? result.message : null,
-        updatedById: admin.id
+        encryptedConfig,
+        maskedDisplay,
+        metadata,
+        lastVerifiedAt,
+        lastVerificationError,
+        updatedById: adminUserId
       }
     });
 
     await writeAuditLog({
       request,
-      actorUserId: admin.id,
-      tenantId: id,
+      actorUserId: adminUserId,
+      tenantId,
       action: result.status === "CONNECTED" ? "admin.integration_verified" : "admin.integration_failed_verification",
       entityType: "Integration",
       entityId: integration.id,
