@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   CircleAlert,
+  DatabaseZap,
   FileSpreadsheet,
   Flame,
   MessageCircle,
@@ -95,6 +96,7 @@ const flowIcons: Record<string, typeof FileSpreadsheet> = {
   GOOGLE_SHEETS: FileSpreadsheet,
   WHATSAPP_CLOUD: MessageCircle,
   WHATSAPP_TEMPLATE_SETTINGS: Send,
+  KNOWLEDGE_BASE: DatabaseZap,
   AI_MODEL: Bot
 };
 
@@ -232,7 +234,7 @@ export function LeadManagementPage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-white">Flow Readiness</h2>
-                    <p className="mt-1 text-sm text-slate-500">Sheets, WhatsApp, templates, and AI agent.</p>
+                    <p className="mt-1 text-sm text-slate-500">Sheets, WhatsApp, templates, knowledge base, and AI agent.</p>
                   </div>
                   <StatusBadge value={ready ? "CONNECTED" : "PARTIALLY_CONNECTED"} />
                 </div>
@@ -276,7 +278,7 @@ export function LeadManagementPage() {
                       <option value="">Configured default</option>
                       {data.templates.map((template) => (
                         <option key={template.id} value={template.id}>
-                          {template.name} · {template.language}
+                          {template.name} - {template.language}
                         </option>
                       ))}
                     </select>

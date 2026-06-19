@@ -2,10 +2,12 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
 export async function GET(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "TEMPLATES");
+    await ensureLeadWorkspaceSchema();
     const templates = await prisma.whatsAppTemplate.findMany({
       where: { tenantId: user.tenantId! },
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }]

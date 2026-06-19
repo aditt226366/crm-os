@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { recalculateConversationLeadTemperature } from "@/lib/lead-temperature";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
 export function normalizePhone(phone: string) {
   const trimmed = phone.trim();
@@ -119,6 +120,7 @@ export function serializeConversation(conversation: {
 }
 
 export async function getTenantConversation(tenantId: string, conversationId: string) {
+  await ensureLeadWorkspaceSchema();
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, tenantId },
     include: {
@@ -152,6 +154,7 @@ export async function upsertInboundConversationMessage({
   source?: "BROADCAST" | "CAMPAIGN" | "AD" | "ORGANIC" | "GOOGLE_SHEET" | "MANUAL";
   sourceId?: string;
 }) {
+  await ensureLeadWorkspaceSchema();
   const normalizedPhone = normalizePhone(phone);
 
   if (messageId) {

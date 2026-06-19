@@ -6,12 +6,13 @@ import { INTEGRATION_DEFINITIONS, type FeatureKey } from "@/lib/constants";
 import { readGoogleSheetLeads, type SheetLead } from "@/lib/google-sheets-leads";
 import { createOutboundConversationMessage, normalizePhone, serializeConversation, serializeMessage } from "@/lib/inbox";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
 import { recordUsage } from "@/lib/usage";
 import { emitTenantEvent } from "@/lib/realtime";
 import { renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
 
-const FLOW_INTEGRATIONS = ["GOOGLE_SHEETS", "WHATSAPP_CLOUD", "WHATSAPP_TEMPLATE_SETTINGS", "AI_MODEL"] as const;
+const FLOW_INTEGRATIONS = ["GOOGLE_SHEETS", "WHATSAPP_CLOUD", "WHATSAPP_TEMPLATE_SETTINGS", "KNOWLEDGE_BASE", "AI_MODEL"] as const;
 
 type FlowIntegration = {
   type: IntegrationType;
@@ -149,6 +150,7 @@ async function safeRecordUsage(input: {
 
 async function currentFlowIntegrations(tenantId: string) {
   await ensureIntegrationSchema();
+  await ensureLeadWorkspaceSchema();
   return prisma.integration.findMany({
     where: { tenantId, type: { in: [...FLOW_INTEGRATIONS] } },
     select: {
@@ -160,7 +162,54 @@ async function currentFlowIntegrations(tenantId: string) {
   });
 }
 
+async function syncConfiguredApprovedTemplate(tenantId: string) {
+  await ensureLeadWorkspaceSchema();
+  const integration = await prisma.integration.findUnique({
+    where: {
+      tenantId_type: {
+        tenantId,
+        type: "WHATSAPP_TEMPLATE_SETTINGS"
+      }
+    },
+    select: { status: true, encryptedConfig: true }
+  });
+
+  if (integration?.status !== "CONNECTED") {
+    return null;
+  }
+
+  const configured = configuredTemplate(readEncryptedConfig(integration.encryptedConfig));
+  if (!configured) {
+    return null;
+  }
+
+  return prisma.whatsAppTemplate.upsert({
+    where: {
+      tenantId_name_language: {
+        tenantId,
+        name: configured.name,
+        language: configured.language
+      }
+    },
+    create: {
+      tenantId,
+      name: configured.name,
+      language: configured.language,
+      category: "MARKETING",
+      status: "APPROVED",
+      body: configured.body,
+      components: {
+        source: "integration-settings"
+      } as Prisma.InputJsonValue
+    },
+    update: {
+      status: "APPROVED"
+    }
+  });
+}
+
 export async function leadFlowSummary(tenantId: string) {
+  await syncConfiguredApprovedTemplate(tenantId);
   const [integrations, templates, leads, totals] = await Promise.all([
     currentFlowIntegrations(tenantId),
     prisma.whatsAppTemplate.findMany({
@@ -368,6 +417,7 @@ export async function runGoogleSheetLeadFlow({
   range?: string;
   maxRows?: number;
 }) {
+  await syncConfiguredApprovedTemplate(tenantId);
   const integrations = integrationMap(await currentFlowIntegrations(tenantId));
   const sheetsConfig = assertConnected(
     integrations,
@@ -384,6 +434,7 @@ export async function runGoogleSheetLeadFlow({
     "WHATSAPP_TEMPLATE_SETTINGS",
     "WhatsApp template settings are not configured for this company."
   );
+  assertConnected(integrations, "KNOWLEDGE_BASE", "Knowledge base is not connected for this company.");
   assertConnected(integrations, "AI_MODEL", "AI model is not connected for this company.");
 
   const template = await resolveTemplate({ tenantId, templateId, templateSettingsConfig });

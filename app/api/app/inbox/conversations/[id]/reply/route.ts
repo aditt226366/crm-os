@@ -7,6 +7,8 @@ import { createOutboundConversationMessage, serializeConversation, serializeMess
 import { emitTenantEvent } from "@/lib/realtime";
 import { recordUsage } from "@/lib/usage";
 import { writeAuditLog } from "@/lib/audit";
+import { readEncryptedConfig } from "@/lib/integration-vault";
+import { sendWhatsAppTextMessage } from "@/lib/whatsapp-cloud";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -42,11 +44,19 @@ export async function POST(request: NextRequest, context: Context) {
     if (integration?.status !== "CONNECTED") {
       throw new ApiError(409, "INTEGRATION_NOT_CONNECTED", "WhatsApp Cloud API is not connected for this company.");
     }
+    const sendResult = await sendWhatsAppTextMessage({
+      config: readEncryptedConfig(integration.encryptedConfig),
+      to: conversation.contact.phone,
+      body: body.body
+    });
 
     const result = await createOutboundConversationMessage({
       tenantId,
       conversationId: id,
       body: body.body,
+      whatsappMessageId: sendResult.whatsappMessageId,
+      status: sendResult.ok ? "PENDING" : "FAILED",
+      failureReason: sendResult.error ?? null,
       metadata: { sentByUserId: user.id, adapter: "whatsapp-cloud-api" }
     });
 
@@ -54,12 +64,12 @@ export async function POST(request: NextRequest, context: Context) {
       tenantId,
       feature: "INBOX",
       provider: "meta",
-      eventType: "message.queued",
+      eventType: sendResult.ok ? "message.queued" : "message.failed",
       endpoint: `/api/app/inbox/conversations/${id}/reply`,
       units: 1,
-      cost: 0.004,
-      status: "SUCCESS",
-      metadata: { messageId: result.message.id }
+      cost: sendResult.ok ? 0.004 : 0,
+      status: sendResult.ok ? "SUCCESS" : "FAILED",
+      metadata: { messageId: result.message.id, failureReason: sendResult.error ?? null }
     });
 
     await writeAuditLog({

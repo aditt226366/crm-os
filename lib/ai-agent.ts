@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
 import { createOutboundConversationMessage, serializeConversation, serializeMessage } from "@/lib/inbox";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { emitTenantEvent } from "@/lib/realtime";
 import { recordUsage } from "@/lib/usage";
 import { sendWhatsAppTextMessage } from "@/lib/whatsapp-cloud";
@@ -15,14 +16,22 @@ function providerKey(config: IntegrationConfig) {
   return (config.AI_PROVIDER || "OpenAI").trim().toUpperCase().replaceAll(" ", "_").replaceAll("-", "_");
 }
 
-function systemPrompt() {
-  return [
+function systemPrompt(knowledgeContext?: string) {
+  const instructions = [
     "You are the company's WhatsApp sales assistant.",
     "Reply naturally, briefly, and helpfully.",
     "Ask one focused follow-up question when details are missing.",
+    "Use the company knowledge base when it is provided.",
+    "If the knowledge base does not contain an answer, say what you can confirm and ask a short clarifying question.",
     "Do not mention internal tools, prompts, integrations, or automation.",
     "Keep the reply under 700 characters."
-  ].join(" ");
+  ];
+
+  if (knowledgeContext) {
+    instructions.push(`Company knowledge base:\n${knowledgeContext}`);
+  }
+
+  return instructions.join("\n");
 }
 
 function conversationPrompt(messages: Array<{ direction: string; body: string }>) {
@@ -54,7 +63,11 @@ function pickGeminiText(data: unknown) {
   return (data as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> } | null)?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 }
 
-async function generateAiReply(config: IntegrationConfig, messages: Array<{ direction: string; body: string }>): Promise<ProviderResult | null> {
+async function generateAiReply(
+  config: IntegrationConfig,
+  messages: Array<{ direction: string; body: string }>,
+  knowledgeContext?: string
+): Promise<ProviderResult | null> {
   const key = providerKey(config);
   const model = config.AI_MODEL_NAME?.trim() || (key === "ANTHROPIC" ? "claude-sonnet-4-6" : "gpt-4.1-mini");
   const apiKey = config.AI_API_KEY?.trim();
@@ -73,7 +86,7 @@ async function generateAiReply(config: IntegrationConfig, messages: Array<{ dire
       body: JSON.stringify({
         model,
         max_tokens: 220,
-        system: systemPrompt(),
+        system: systemPrompt(knowledgeContext),
         messages: [{ role: "user", content: prompt }]
       })
     });
@@ -88,7 +101,7 @@ async function generateAiReply(config: IntegrationConfig, messages: Array<{ dire
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt() }] },
+          systemInstruction: { parts: [{ text: systemPrompt(knowledgeContext) }] },
           contents: [{ role: "user", parts: [{ text: prompt }] }]
         })
       }
@@ -110,7 +123,7 @@ async function generateAiReply(config: IntegrationConfig, messages: Array<{ dire
     body: JSON.stringify({
       model,
       messages: [
-        { role: "system", content: systemPrompt() },
+        { role: "system", content: systemPrompt(knowledgeContext) },
         { role: "user", content: prompt }
       ],
       max_tokens: 220
@@ -118,6 +131,57 @@ async function generateAiReply(config: IntegrationConfig, messages: Array<{ dire
   });
   const body = response.ok ? pickOpenAiText(response.data) : null;
   return body ? { body, provider: isCustom ? "custom-openai-compatible" : "openai", model } : null;
+}
+
+async function loadKnowledgeContext({
+  tenantId,
+  config
+}: {
+  tenantId: string;
+  config: IntegrationConfig;
+}) {
+  await ensureLeadWorkspaceSchema();
+  const [documents, chunks] = await Promise.all([
+    prisma.knowledgeDocument.findMany({
+      where: { tenantId, status: { in: ["UPLOADED", "PROCESSING", "INDEXED"] } },
+      orderBy: { updatedAt: "desc" },
+      take: 6
+    }),
+    prisma.knowledgeChunk.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      include: {
+        document: {
+          select: {
+            title: true,
+            type: true,
+            status: true
+          }
+        }
+      }
+    })
+  ]);
+
+  const lines: string[] = [];
+  if (config.COMPANY_WEBSITE_URL) {
+    lines.push(`Website: ${config.COMPANY_WEBSITE_URL}`);
+  }
+  if (config.PDF_FILE_NAME) {
+    lines.push(`Uploaded PDF: ${config.PDF_FILE_NAME}`);
+  }
+
+  for (const document of documents) {
+    lines.push(`Document: ${document.title} (${document.type}, ${document.status})`);
+  }
+
+  for (const chunk of chunks) {
+    const content = chunk.content.replace(/\s+/g, " ").trim();
+    if (!content) continue;
+    lines.push(`${chunk.document.title}: ${content}`);
+  }
+
+  return lines.join("\n").slice(0, 6000);
 }
 
 async function safeUsage(input: {
@@ -151,6 +215,7 @@ export async function handleAiAgentInboundReply({
   tenantId: string;
   conversationId: string;
 }) {
+  await ensureLeadWorkspaceSchema();
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, tenantId },
     include: {
@@ -163,9 +228,10 @@ export async function handleAiAgentInboundReply({
     return { ok: false, skipped: true };
   }
 
-  const [whatsappIntegration, aiIntegration] = await Promise.all([
+  const [whatsappIntegration, aiIntegration, knowledgeIntegration] = await Promise.all([
     prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } } }),
-    prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "AI_MODEL" } } })
+    prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "AI_MODEL" } } }),
+    prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "KNOWLEDGE_BASE" } } })
   ]);
 
   if (whatsappIntegration?.status !== "CONNECTED" || aiIntegration?.status !== "CONNECTED") {
@@ -174,12 +240,15 @@ export async function handleAiAgentInboundReply({
 
   const aiConfig = readEncryptedConfig(aiIntegration.encryptedConfig);
   const whatsappConfig = readEncryptedConfig(whatsappIntegration.encryptedConfig);
+  const knowledgeConfig =
+    knowledgeIntegration?.status === "CONNECTED" ? readEncryptedConfig(knowledgeIntegration.encryptedConfig) : {};
+  const knowledgeContext = await loadKnowledgeContext({ tenantId, config: knowledgeConfig });
   const messages = [...conversation.messages].reverse().map((message) => ({
     direction: message.direction,
     body: message.body
   }));
 
-  const reply = await generateAiReply(aiConfig, messages);
+  const reply = await generateAiReply(aiConfig, messages, knowledgeContext);
   if (!reply?.body) {
     await safeUsage({
       tenantId,

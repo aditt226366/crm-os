@@ -7,6 +7,8 @@ import { createOutboundConversationMessage, getTenantConversation, serializeConv
 import { emitTenantEvent } from "@/lib/realtime";
 import { recordUsage } from "@/lib/usage";
 import { writeAuditLog } from "@/lib/audit";
+import { readEncryptedConfig } from "@/lib/integration-vault";
+import { renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -46,26 +48,41 @@ export async function POST(request: NextRequest, context: Context) {
     if (!template) {
       throw new ApiError(404, "TEMPLATE_NOT_FOUND", "Approved template not found for this company.");
     }
+    const variables = Object.fromEntries(
+      Object.entries(body.variables ?? {}).map(([key, value]) => [key, String(value ?? "")])
+    );
+    const variableValues = Object.values(variables).filter(Boolean);
+    const sendResult = await sendWhatsAppTemplateMessage({
+      config: readEncryptedConfig(integration.encryptedConfig),
+      to: conversation.contact.phone,
+      templateName: template.name,
+      language: template.language,
+      variables: variableValues.length ? variableValues : undefined
+    });
+    const renderedBody = body.body || renderTemplateBody(template.body, variables);
 
     const result = await createOutboundConversationMessage({
       tenantId,
       conversationId: id,
       type: "TEMPLATE",
       templateId: template.id,
-      body: body.body,
-      metadata: { sentByUserId: user.id, templateName: template.name, variables: body.variables ?? {} }
+      body: renderedBody,
+      whatsappMessageId: sendResult.whatsappMessageId,
+      status: sendResult.ok ? "PENDING" : "FAILED",
+      failureReason: sendResult.error ?? null,
+      metadata: { sentByUserId: user.id, templateName: template.name, variables }
     });
 
     await recordUsage({
       tenantId,
       feature: "TEMPLATES",
       provider: "meta",
-      eventType: "template.queued",
+      eventType: sendResult.ok ? "template.queued" : "template.failed",
       endpoint: `/api/app/inbox/conversations/${id}/template-reply`,
       units: 1,
-      cost: 0.006,
-      status: "SUCCESS",
-      metadata: { messageId: result.message.id, templateId: template.id }
+      cost: sendResult.ok ? 0.006 : 0,
+      status: sendResult.ok ? "SUCCESS" : "FAILED",
+      metadata: { messageId: result.message.id, templateId: template.id, failureReason: sendResult.error ?? null }
     });
 
     await writeAuditLog({

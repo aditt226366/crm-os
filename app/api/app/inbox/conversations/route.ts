@@ -4,10 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { requireFeature } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { serializeConversation } from "@/lib/inbox";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
 export async function GET(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "INBOX");
+    await ensureLeadWorkspaceSchema();
     const tenantId = user.tenantId!;
     const { searchParams } = request.nextUrl;
     const filter = searchParams.get("filter") ?? "all";
