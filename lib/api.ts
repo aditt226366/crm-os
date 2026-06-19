@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
 export class ApiError extends Error {
@@ -19,6 +20,29 @@ export function json(data: unknown, init?: ResponseInit) {
   return response;
 }
 
+function prismaDebug(error: unknown) {
+  const details = error as { code?: unknown; meta?: unknown; message?: unknown };
+  return {
+    prismaCode:
+      error instanceof Prisma.PrismaClientKnownRequestError
+        ? error.code
+        : typeof details.code === "string"
+          ? details.code
+          : undefined,
+    prismaMeta: error instanceof Prisma.PrismaClientKnownRequestError ? error.meta : undefined,
+    prismaMessage: typeof details.message === "string" ? details.message : String(error)
+  };
+}
+
+function isPrismaError(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    error instanceof Prisma.PrismaClientInitializationError ||
+    error instanceof Prisma.PrismaClientUnknownRequestError ||
+    error instanceof Prisma.PrismaClientRustPanicError
+  );
+}
+
 export function errorResponse(error: unknown) {
   if (error instanceof ApiError) {
     return json(
@@ -33,15 +57,44 @@ export function errorResponse(error: unknown) {
   }
 
   if (error instanceof ZodError) {
+    const firstIssue = error.issues[0];
     return json(
       {
         error: {
           code: "VALIDATION_ERROR",
-          message: "Request validation failed",
+          message: firstIssue?.message ?? "Request validation failed",
           issues: error.issues
         }
       },
       { status: 400 }
+    );
+  }
+
+  if (isPrismaError(error)) {
+    const debug = prismaDebug(error);
+    const message =
+      error instanceof Prisma.PrismaClientInitializationError
+        ? "Database connection failed. Check DATABASE_URL, DIRECT_URL, and Supabase TLS settings."
+        : debug.prismaCode
+          ? `Database request failed: ${debug.prismaCode}`
+          : "Database request failed.";
+
+    console.error("[api.db] failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      prismaCode: debug.prismaCode,
+      prismaMeta: debug.prismaMeta,
+      prismaMessage: debug.prismaMessage
+    });
+
+    return json(
+      {
+        error: {
+          code: "DATABASE_REQUEST_FAILED",
+          message,
+          ...(process.env.NODE_ENV !== "production" ? { debug } : {})
+        }
+      },
+      { status: 500 }
     );
   }
 

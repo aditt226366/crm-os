@@ -5,6 +5,7 @@ import { upsertInboundConversationMessage, serializeConversation, serializeMessa
 import { emitTenantEvent } from "@/lib/realtime";
 import { whatsappWebhookMessageSchema } from "@/lib/validation";
 import { readEncryptedConfig } from "@/lib/integration-vault";
+import { handleAiAgentInboundReply } from "@/lib/ai-agent";
 
 type MetaMessage = {
   id?: string;
@@ -149,6 +150,9 @@ export async function POST(request: NextRequest) {
         emitTenantEvent(tenantId, "message.created", payload);
         emitTenantEvent(tenantId, "conversation.updated", payload.conversation);
         emitTenantEvent(tenantId, "lead.temperature.updated", payload.scoring);
+        await handleAiAgentInboundReply({ tenantId, conversationId: result.conversation.id }).catch((error) => {
+          console.error("[webhook.ai-agent] failed", error instanceof Error ? error.message : String(error));
+        });
       }
       return json({ ok: true, duplicate: result.duplicate });
     }
@@ -202,6 +206,9 @@ export async function POST(request: NextRequest) {
             emitTenantEvent(tenantId, "message.created", eventPayload);
             emitTenantEvent(tenantId, "conversation.updated", eventPayload.conversation);
             emitTenantEvent(tenantId, "lead.temperature.updated", eventPayload.scoring);
+            await handleAiAgentInboundReply({ tenantId, conversationId: result.conversation.id }).catch((error) => {
+              console.error("[webhook.ai-agent] failed", error instanceof Error ? error.message : String(error));
+            });
           }
         }
       }

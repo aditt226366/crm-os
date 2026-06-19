@@ -1,6 +1,12 @@
 import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+function prismaDatabaseUrl() {
+  return process.env.DATABASE_URL?.replace(/sslmode=require/g, "sslmode=disable");
+}
+
+const prisma = new PrismaClient({
+  datasources: prismaDatabaseUrl() ? { db: { url: prismaDatabaseUrl()! } } : undefined
+});
 const username = process.env.PRINTWEAR_USERNAME?.trim() || "Printwear@xyz";
 
 async function main() {

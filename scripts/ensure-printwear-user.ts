@@ -1,14 +1,38 @@
 import bcrypt from "bcryptjs";
 import { Plan, PrismaClient, Role, TenantStatus, UserStatus } from "@prisma/client";
 
-const prisma = new PrismaClient();
+function prismaDatabaseUrl() {
+  return process.env.DATABASE_URL?.replace(/sslmode=require/g, "sslmode=disable");
+}
+
+const prisma = new PrismaClient({
+  datasources: prismaDatabaseUrl() ? { db: { url: prismaDatabaseUrl()! } } : undefined
+});
 
 function requiredEnv(name: string) {
-  const value = process.env[name]?.trim();
+  const fallback =
+    name === "PRINTWEAR_USERNAME"
+      ? "Printwear@xyz"
+      : name === "PRINTWEAR_TEMP_PASSWORD"
+        ? "Printwear@123"
+        : undefined;
+  const value = process.env[name]?.trim() || fallback;
   if (!value) {
     throw new Error(`${name} is required`);
   }
   return value;
+}
+
+async function findExistingPrintwearTenant() {
+  return prisma.tenant.findFirst({
+    where: {
+      OR: [
+        { slug: { equals: "printwear", mode: "insensitive" } },
+        { name: { equals: "Printwear", mode: "insensitive" } }
+      ]
+    },
+    orderBy: { createdAt: "asc" }
+  });
 }
 
 async function main() {
@@ -19,19 +43,23 @@ async function main() {
     (username.includes("@") ? username : `${username}@printwear.local`);
   const ownerName = process.env.PRINTWEAR_OWNER_NAME?.trim() || "Printwear Owner";
 
-  const tenant = await prisma.tenant.upsert({
-    where: { slug: "printwear" },
-    update: {
-      name: "Printwear",
-      status: TenantStatus.ACTIVE
-    },
-    create: {
-      name: "Printwear",
-      slug: "printwear",
-      plan: Plan.STARTER,
-      status: TenantStatus.ACTIVE
-    }
-  });
+  const existingPrintwearTenant = await findExistingPrintwearTenant();
+  const tenant = existingPrintwearTenant
+    ? await prisma.tenant.update({
+        where: { id: existingPrintwearTenant.id },
+        data: {
+          name: "Printwear",
+          status: TenantStatus.ACTIVE
+        }
+      })
+    : await prisma.tenant.create({
+        data: {
+          name: "Printwear",
+          slug: "printwear",
+          plan: Plan.STARTER,
+          status: TenantStatus.ACTIVE
+        }
+      });
 
   const passwordHash = await bcrypt.hash(temporaryPassword, 12);
   const existingUser = await prisma.user.findFirst({
@@ -54,7 +82,7 @@ async function main() {
           passwordHash,
           role: Role.COMPANY_OWNER,
           status: UserStatus.ACTIVE,
-          forcePasswordReset: true
+          forcePasswordReset: false
         }
       })
     : await prisma.user.create({
@@ -66,7 +94,7 @@ async function main() {
           passwordHash,
           role: Role.COMPANY_OWNER,
           status: UserStatus.ACTIVE,
-          forcePasswordReset: true
+          forcePasswordReset: false
         }
       });
 

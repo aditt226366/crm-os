@@ -12,6 +12,18 @@ type SuccessPayload = {
   warning: string;
 };
 
+type ErrorPayload = {
+  error?: {
+    message?: string;
+    issues?: Array<{ message?: string }>;
+  };
+  message?: string;
+};
+
+function errorMessage(data: ErrorPayload) {
+  return data.error?.issues?.[0]?.message ?? data.error?.message ?? data.message ?? "Could not create company";
+}
+
 export function CreateCompanyModal({
   open,
   onClose,
@@ -29,21 +41,28 @@ export function CreateCompanyModal({
     event.preventDefault();
     setLoading(true);
     setError(null);
-    const form = new FormData(event.currentTarget);
-    const payload = Object.fromEntries(form.entries());
-    const response = await fetch("/api/admin/companies", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    const data = (await response.json()) as SuccessPayload & { error?: { message?: string } };
-    setLoading(false);
-    if (!response.ok) {
-      setError(data.error?.message ?? "Could not create company");
-      return;
+    try {
+      const form = new FormData(event.currentTarget);
+      const payload = Object.fromEntries(form.entries());
+      const response = await fetch("/api/admin/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = (await response.json().catch(() => ({}))) as SuccessPayload & ErrorPayload;
+
+      if (!response.ok) {
+        setError(errorMessage(data));
+        return;
+      }
+
+      setSuccess(data);
+      onCreated();
+    } catch {
+      setError("Could not reach the company API. Check the server and try again.");
+    } finally {
+      setLoading(false);
     }
-    setSuccess(data);
-    onCreated();
   }
 
   function close() {
@@ -90,6 +109,9 @@ export function CreateCompanyModal({
                       key={name}
                       name={name}
                       placeholder={label}
+                      type={name === "temporaryPassword" ? "password" : "text"}
+                      required={name !== "phoneNumber" && name !== "temporaryPassword"}
+                      autoComplete={name === "temporaryPassword" ? "new-password" : "off"}
                       className="h-12 rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm text-white outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
                     />
                   ))}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { CompanyFeatureDrawer } from "@/components/admin/CompanyFeatureDrawer";
 import { CompanySummary } from "@/components/admin/CompanyCard";
@@ -19,19 +19,38 @@ export function CompaniesPage() {
   const [drawerCompany, setDrawerCompany] = useState<CompanySummary | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  async function loadCompanies() {
-    const response = await fetch("/api/admin/companies");
-    const data = (await response.json()) as { companies: CompanySummary[] };
-    setCompanies(data.companies ?? []);
-    setLoading(false);
-  }
+  const loadCompanies = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/companies");
+      const data = (await response.json().catch(() => ({}))) as {
+        companies?: CompanySummary[];
+        error?: { message?: string };
+        message?: string;
+      };
+
+      if (!response.ok) {
+        setCompanies([]);
+        setNotice(data.error?.message ?? data.message ?? "Could not load companies.");
+        return;
+      }
+
+      setCompanies(data.companies ?? []);
+      setNotice(null);
+    } catch {
+      setCompanies([]);
+      setNotice("Could not reach the company API. Check the server and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetch("/api/admin/companies")
-      .then((response) => response.json())
-      .then((data: { companies: CompanySummary[] }) => setCompanies(data.companies ?? []))
-      .finally(() => setLoading(false));
-  }, []);
+    const timeout = window.setTimeout(() => {
+      void loadCompanies();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [loadCompanies]);
 
   async function toggleStatus(company: CompanySummary) {
     const action = company.status === "ACTIVE" ? "deactivate" : "reactivate";

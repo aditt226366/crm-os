@@ -13,6 +13,15 @@ const globalForPrisma = globalThis as unknown as {
   prismaDbEnvLogged?: boolean;
 };
 
+function prismaDatabaseUrl() {
+  const url = process.env.DATABASE_URL;
+  if (!url || process.platform !== "win32") {
+    return url;
+  }
+
+  return url.replace(/sslmode=require/g, "sslmode=disable");
+}
+
 if (isProductionRuntime && !globalForPrisma.prismaDbEnvLogged) {
   const env = databaseEnvCheck();
   console.log("[db.env]", {
@@ -26,6 +35,7 @@ if (isProductionRuntime && !globalForPrisma.prismaDbEnvLogged) {
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
+    datasources: prismaDatabaseUrl() ? { db: { url: prismaDatabaseUrl()! } } : undefined,
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
   });
 

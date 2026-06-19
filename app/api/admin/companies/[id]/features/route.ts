@@ -2,8 +2,9 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
-import { FEATURE_KEYS } from "@/lib/constants";
+import { type Plan } from "@/lib/constants";
 import { serializeFeature } from "@/lib/serializers";
+import { ensureTenantFeatureRows } from "@/lib/tenant-feature-schema";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -11,15 +12,16 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const admin = await requirePlatformAdmin(request);
     const { id } = await context.params;
-    await Promise.all(
-      FEATURE_KEYS.map((featureKey) =>
-        prisma.tenantFeature.upsert({
-          where: { tenantId_featureKey: { tenantId: id, featureKey } },
-          create: { tenantId: id, featureKey, enabled: false, updatedById: admin.id },
-          update: {}
-        })
-      )
-    );
+    const tenant = await prisma.tenant.findUnique({
+      where: { id },
+      select: { plan: true }
+    });
+
+    if (!tenant) {
+      return json({ error: { code: "COMPANY_NOT_FOUND", message: "Company not found" } }, { status: 404 });
+    }
+
+    await ensureTenantFeatureRows(id, tenant.plan as Plan, admin.id);
     const features = await prisma.tenantFeature.findMany({
       where: { tenantId: id },
       include: { updatedBy: true },

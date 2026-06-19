@@ -235,8 +235,7 @@ function configuredPrintwearOwner() {
     password:
       process.env.PRINTWEAR_TEMP_PASSWORD?.trim() ||
       process.env.PRINTWEAR_PASSWORD?.trim() ||
-      process.env.PLATFORM_ADMIN_PASSWORD?.replace(/^"|"$/g, "").trim() ||
-      "ChangeMe123!",
+      "Printwear@123",
     name: process.env.PRINTWEAR_OWNER_NAME?.trim() || "Printwear Owner"
   };
 }
@@ -248,6 +247,16 @@ async function seedAuthUsers() {
   const printwearPasswordHash = await hashPassword(printwear.password);
 
   await prisma.$executeRaw`
+    UPDATE public."Tenant"
+    SET
+      "name" = 'Printwear',
+      "status" = 'ACTIVE'::public."TenantStatus",
+      "updatedAt" = NOW()
+    WHERE LOWER("slug") = 'printwear'
+    OR LOWER("name") = 'printwear';
+  `;
+
+  await prisma.$executeRaw`
     INSERT INTO public."Tenant" (
       "id",
       "name",
@@ -257,7 +266,7 @@ async function seedAuthUsers() {
       "createdAt",
       "updatedAt"
     )
-    VALUES (
+    SELECT
       'tenant_printwear',
       'Printwear',
       'printwear',
@@ -265,6 +274,11 @@ async function seedAuthUsers() {
       'STARTER'::public."Plan",
       NOW(),
       NOW()
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM public."Tenant"
+      WHERE LOWER("slug") = 'printwear'
+      OR LOWER("name") = 'printwear'
     )
     ON CONFLICT ("slug") DO UPDATE
     SET
@@ -327,25 +341,40 @@ async function seedAuthUsers() {
     )
     VALUES (
       'user_printwear_owner',
-      (SELECT "id" FROM public."Tenant" WHERE "slug" = 'printwear' LIMIT 1),
+      (
+        SELECT "id"
+        FROM public."Tenant"
+        WHERE LOWER("slug") = 'printwear'
+        OR LOWER("name") = 'printwear'
+        ORDER BY "createdAt" ASC
+        LIMIT 1
+      ),
       ${printwear.name},
       ${printwear.email},
       ${printwear.username},
       ${printwearPasswordHash},
       'COMPANY_OWNER'::public."Role",
       'ACTIVE'::public."UserStatus",
-      true,
+      false,
       NOW(),
       NOW()
     )
     ON CONFLICT ("email") DO UPDATE
     SET
-      "tenantId" = (SELECT "id" FROM public."Tenant" WHERE "slug" = 'printwear' LIMIT 1),
+      "tenantId" = (
+        SELECT "id"
+        FROM public."Tenant"
+        WHERE LOWER("slug") = 'printwear'
+        OR LOWER("name") = 'printwear'
+        ORDER BY "createdAt" ASC
+        LIMIT 1
+      ),
       "name" = EXCLUDED."name",
       "username" = EXCLUDED."username",
       "passwordHash" = EXCLUDED."passwordHash",
       "role" = 'COMPANY_OWNER'::public."Role",
       "status" = 'ACTIVE'::public."UserStatus",
+      "forcePasswordReset" = false,
       "updatedAt" = NOW();
   `;
 }

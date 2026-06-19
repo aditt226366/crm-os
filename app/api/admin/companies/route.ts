@@ -1,12 +1,15 @@
 import { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { companyCreateSchema } from "@/lib/validation";
 import { FEATURE_KEYS, INTEGRATION_TYPES, defaultEnabledFeatures } from "@/lib/constants";
 import { generateTemporaryPassword, hashPassword, sanitizeText } from "@/lib/security";
-import { writeAuditLog } from "@/lib/audit";
+import { safeCreateAuditLog } from "@/lib/audit";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
+import { ensureTenantFeatureSchema } from "@/lib/tenant-feature-schema";
 
 function serializeTenant(tenant: {
   id: string;
@@ -41,9 +44,24 @@ function serializeTenant(tenant: {
   };
 }
 
+function conflictMessage(error: Prisma.PrismaClientKnownRequestError) {
+  const target = Array.isArray(error.meta?.target) ? error.meta.target.join(",") : String(error.meta?.target ?? "");
+
+  if (target.includes("slug")) {
+    return "Company slug already exists. Use a different slug.";
+  }
+
+  if (target.includes("email") || target.includes("username")) {
+    return "Login username already exists. Use a different owner login.";
+  }
+
+  return "Company already exists with one of these unique values.";
+}
+
 export async function GET(request: NextRequest) {
   try {
     await requirePlatformAdmin(request);
+    await ensureTenantFeatureSchema();
     const tenants = await prisma.tenant.findMany({
       orderBy: { createdAt: "desc" },
       include: {
@@ -60,6 +78,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const admin = await requirePlatformAdmin(request);
+    await ensureTenantFeatureSchema();
+    await ensureIntegrationSchema();
     const body = companyCreateSchema.parse(await request.json());
     const temporaryPassword =
       body.temporaryPassword && body.temporaryPassword.length > 0
@@ -114,7 +134,7 @@ export async function POST(request: NextRequest) {
       return createdTenant;
     });
 
-    await writeAuditLog({
+    await safeCreateAuditLog({
       request,
       actorUserId: admin.id,
       tenantId: tenant.id,
@@ -141,6 +161,18 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return json(
+        {
+          error: {
+            code: "COMPANY_CONFLICT",
+            message: conflictMessage(error)
+          }
+        },
+        { status: 409 }
+      );
+    }
+
     return errorResponse(error);
   }
 }

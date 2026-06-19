@@ -1,5 +1,5 @@
-import { FeatureRoutePlaceholder } from "@/components/app/FeatureRoutePlaceholder";
+import { LeadManagementPage } from "@/components/app/leads/LeadManagementPage";
 
 export default function Page() {
-  return <FeatureRoutePlaceholder module="leads" />;
+  return <LeadManagementPage />;
 }

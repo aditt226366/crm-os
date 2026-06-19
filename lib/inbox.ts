@@ -279,7 +279,10 @@ export async function createOutboundConversationMessage({
   body,
   type = "TEXT",
   templateId,
-  metadata
+  metadata,
+  status,
+  whatsappMessageId,
+  failureReason
 }: {
   tenantId: string;
   conversationId: string;
@@ -287,9 +290,13 @@ export async function createOutboundConversationMessage({
   type?: "TEXT" | "TEMPLATE" | "NOTE";
   templateId?: string;
   metadata?: unknown;
+  status?: "PENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED";
+  whatsappMessageId?: string;
+  failureReason?: string | null;
 }) {
   const conversation = await getTenantConversation(tenantId, conversationId);
   const now = new Date();
+  const messageStatus = status ?? (type === "NOTE" ? "SENT" : "PENDING");
 
   const message = await prisma.message.create({
     data: {
@@ -300,7 +307,9 @@ export async function createOutboundConversationMessage({
       type,
       body,
       templateId,
-      status: type === "NOTE" ? "SENT" : "PENDING",
+      whatsappMessageId,
+      status: messageStatus,
+      failureReason,
       metadata: metadata === undefined ? undefined : (metadata as object)
     }
   });

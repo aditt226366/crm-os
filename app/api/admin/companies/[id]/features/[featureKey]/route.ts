@@ -5,6 +5,7 @@ import { errorResponse, json } from "@/lib/api";
 import { featureToggleSchema, parseFeatureKey } from "@/lib/validation";
 import { serializeFeature } from "@/lib/serializers";
 import { writeAuditLog } from "@/lib/audit";
+import { ensureTenantFeatureSchema } from "@/lib/tenant-feature-schema";
 
 type Context = { params: Promise<{ id: string; featureKey: string }> };
 
@@ -13,6 +14,7 @@ export async function PATCH(request: NextRequest, context: Context) {
     const admin = await requirePlatformAdmin(request);
     const { id, featureKey: rawFeatureKey } = await context.params;
     const featureKey = parseFeatureKey(rawFeatureKey);
+    await ensureTenantFeatureSchema();
     const body = featureToggleSchema.parse(await request.json());
     const oldValue = await prisma.tenantFeature.findUnique({
       where: { tenantId_featureKey: { tenantId: id, featureKey } }

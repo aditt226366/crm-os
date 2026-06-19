@@ -1,0 +1,371 @@
+"use client";
+
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  Bot,
+  CircleAlert,
+  FileSpreadsheet,
+  Flame,
+  MessageCircle,
+  Play,
+  RefreshCw,
+  Send,
+  ThermometerSun,
+  Users
+} from "lucide-react";
+import { FeatureGuard } from "@/components/app/FeatureGuard";
+import { PageHeader } from "@/components/app/PageHeader";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { GlassCard } from "@/components/shared/GlassCard";
+import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
+import { NeonButton } from "@/components/shared/NeonButton";
+import { StatusBadge } from "@/components/shared/StatusBadge";
+
+type IntegrationStatus = {
+  type: string;
+  name: string;
+  status: string;
+  ready: boolean;
+  message: string | null;
+};
+
+type TemplateRecord = {
+  id: string;
+  name: string;
+  language: string;
+  category: string;
+  status: string;
+  body: string;
+  updatedAt: string;
+};
+
+type LeadRecord = {
+  id: string;
+  status: string;
+  temperature: string;
+  source: string;
+  updatedAt: string;
+  contact: {
+    id: string;
+    name: string;
+    phone: string;
+    optOut: boolean;
+    customerReplyCount: number;
+    totalMessageCount: number;
+    lastContactedAt: string | null;
+  };
+  conversation: {
+    id: string;
+    status: string;
+    humanTakeover: boolean;
+    lastMessageText: string | null;
+    lastMessageAt: string | null;
+    lastMessageStatus: string | null;
+  } | null;
+};
+
+type LeadData = {
+  integrations: IntegrationStatus[];
+  templates: TemplateRecord[];
+  metrics: {
+    total: number;
+    hot: number;
+    warm: number;
+    scrap: number;
+  };
+  leads: LeadRecord[];
+};
+
+type RunResult = {
+  scanned: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  results: Array<{
+    phone: string;
+    status: string;
+    reason: string | null;
+    conversationId?: string;
+    messageId?: string;
+    whatsappMessageId?: string | null;
+  }>;
+};
+
+const flowIcons: Record<string, typeof FileSpreadsheet> = {
+  GOOGLE_SHEETS: FileSpreadsheet,
+  WHATSAPP_CLOUD: MessageCircle,
+  WHATSAPP_TEMPLATE_SETTINGS: Send,
+  AI_MODEL: Bot
+};
+
+function metricCards(data: LeadData) {
+  return [
+    ["Total Leads", data.metrics.total, Users],
+    ["Hot", data.metrics.hot, Flame],
+    ["Warm", data.metrics.warm, ThermometerSun],
+    ["Scrap", data.metrics.scrap, CircleAlert]
+  ] as const;
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "No activity";
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+export function LeadManagementPage() {
+  const [data, setData] = useState<LeadData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<RunResult | null>(null);
+  const [templateId, setTemplateId] = useState("");
+  const [range, setRange] = useState("A:Z");
+  const [maxRows, setMaxRows] = useState(50);
+
+  async function load() {
+    setError(null);
+    const response = await fetch("/api/app/leads", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
+    }
+    setData(payload as LeadData);
+  }
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadInitial() {
+      try {
+        const response = await fetch("/api/app/leads", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
+        }
+        if (active) setData(payload as LeadData);
+      } catch (loadError) {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Unable to load lead flow");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    loadInitial();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const ready = useMemo(() => data?.integrations.every((integration) => integration.ready) ?? false, [data]);
+  const selectedTemplate = data?.templates.find((template) => template.id === templateId) ?? data?.templates[0] ?? null;
+
+  async function run(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    try {
+      const response = await fetch("/api/app/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          templateId: templateId || undefined,
+          range,
+          maxRows
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error?.message ?? payload.message ?? "Lead flow failed");
+      }
+      setData(payload as LeadData);
+      setResult(payload.result as RunResult);
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : "Lead flow failed");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <FeatureGuard featureKey="LEAD_MANAGEMENT">
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Lead Management"
+          title="Lead Management"
+          description="Google Sheets intake, approved template outreach, and AI-led WhatsApp follow-up for tenant leads."
+          actions={
+            <NeonButton type="button" onClick={() => load().catch((loadError: Error) => setError(loadError.message))}>
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </NeonButton>
+          }
+        />
+
+        {error ? (
+          <GlassCard className="border-rose-300/20 bg-rose-300/10 p-4 text-sm text-rose-100">{error}</GlassCard>
+        ) : null}
+
+        {loading || !data ? (
+          <LoadingSkeleton rows={8} />
+        ) : (
+          <>
+            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {metricCards(data).map(([label, value, Icon]) => (
+                <GlassCard key={label} className="p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm text-slate-400">{label}</p>
+                    <Icon className="h-5 w-5 text-cyan-100" />
+                  </div>
+                  <p className="mt-4 text-3xl font-semibold text-white">{value}</p>
+                </GlassCard>
+              ))}
+            </section>
+
+            <section className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+              <GlassCard className="p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Flow Readiness</h2>
+                    <p className="mt-1 text-sm text-slate-500">Sheets, WhatsApp, templates, and AI agent.</p>
+                  </div>
+                  <StatusBadge value={ready ? "CONNECTED" : "PARTIALLY_CONNECTED"} />
+                </div>
+                <div className="mt-5 space-y-3">
+                  {data.integrations.map((integration) => {
+                    const Icon = flowIcons[integration.type] ?? CircleAlert;
+                    return (
+                      <div key={integration.type} className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/[0.05] text-cyan-100">
+                            <Icon className="h-4 w-4" />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-white">{integration.name}</p>
+                            <p className="truncate text-xs text-slate-500">{integration.message ?? integration.type.replaceAll("_", " ")}</p>
+                          </div>
+                        </div>
+                        <StatusBadge value={integration.status} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </GlassCard>
+
+              <GlassCard className="p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Run Sheet Outreach</h2>
+                    <p className="mt-1 text-sm text-slate-500">Imports numbers and sends the selected approved template.</p>
+                  </div>
+                  <Send className="h-5 w-5 text-cyan-100" />
+                </div>
+                <form onSubmit={run} className="mt-5 grid gap-3 md:grid-cols-[1fr_0.55fr_0.45fr]">
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Template</span>
+                    <select
+                      value={templateId}
+                      onChange={(event) => setTemplateId(event.target.value)}
+                      className="h-11 w-full rounded-2xl border border-white/10 bg-slate-950 px-3 text-sm text-white outline-none"
+                    >
+                      <option value="">Configured default</option>
+                      {data.templates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.name} · {template.language}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Range</span>
+                    <input
+                      value={range}
+                      onChange={(event) => setRange(event.target.value)}
+                      className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none"
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rows</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={maxRows}
+                      onChange={(event) => setMaxRows(Number(event.target.value))}
+                      className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none"
+                    />
+                  </label>
+                  <div className="md:col-span-3 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-white">{selectedTemplate?.name ?? "Configured default template"}</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{selectedTemplate?.body ?? "Template settings integration will supply the approved template."}</p>
+                    </div>
+                    <NeonButton loading={running} disabled={!ready} className="shrink-0">
+                      <Play className="h-4 w-4" />
+                      Run Flow
+                    </NeonButton>
+                  </div>
+                </form>
+              </GlassCard>
+            </section>
+
+            {result ? (
+              <GlassCard className="p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="text-lg font-semibold text-white">Last Run</h2>
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge value={`SCANNED ${result.scanned}`} />
+                    <StatusBadge value={`SENT ${result.sent}`} />
+                    <StatusBadge value={`FAILED ${result.failed}`} />
+                    <StatusBadge value={`SKIPPED ${result.skipped}`} />
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {result.results.slice(0, 8).map((item) => (
+                    <div key={`${item.phone}-${item.messageId ?? item.status}`} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                      <p className="truncate text-sm font-semibold text-white">{item.phone}</p>
+                      <p className="mt-2 text-xs uppercase tracking-wide text-slate-500">{item.status}</p>
+                      {item.reason ? <p className="mt-2 text-xs leading-5 text-rose-100">{item.reason}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              </GlassCard>
+            ) : null}
+
+            <section>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-xl font-semibold text-white">Recent Leads</h2>
+                <StatusBadge value="LIVE DATA" />
+              </div>
+              {data.leads.length ? (
+                <div className="overflow-hidden rounded-[24px] border border-white/10">
+                  <div className="min-w-[760px] divide-y divide-white/10">
+                    {data.leads.map((lead) => (
+                      <div key={lead.id} className="grid grid-cols-[1.15fr_0.75fr_0.75fr_1fr_0.75fr] items-center gap-4 bg-white/[0.025] px-4 py-4">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-white">{lead.contact.name}</p>
+                          <p className="mt-1 truncate text-xs text-slate-500">{lead.contact.phone}</p>
+                        </div>
+                        <StatusBadge value={lead.temperature} />
+                        <StatusBadge value={lead.status} />
+                        <p className="truncate text-sm text-slate-300">{lead.conversation?.lastMessageText ?? lead.source.replaceAll("_", " ")}</p>
+                        <p className="text-right text-xs text-slate-500">{formatDate(lead.conversation?.lastMessageAt ?? lead.updatedAt)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <EmptyState title="No leads yet" description="Google Sheets leads and WhatsApp conversations will appear here after the first flow run." />
+              )}
+            </section>
+          </>
+        )}
+      </div>
+    </FeatureGuard>
+  );
+}

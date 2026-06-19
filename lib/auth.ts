@@ -120,7 +120,7 @@ export function setAuthCookies(
   response: NextResponse,
   tokens: { accessToken: string; refreshToken?: string | null }
 ) {
-  const secure = process.env.NODE_ENV === "production";
+  const secure = process.env.NODE_ENV === "production" && process.env.APP_URL?.startsWith("https://");
   response.cookies.set(accessCookie, tokens.accessToken, {
     httpOnly: true,
     sameSite: "lax",
