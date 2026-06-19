@@ -9,6 +9,16 @@ type WhatsAppSendResult = {
   error?: string;
 };
 
+export type WhatsAppTemplateComponentPayload = {
+  type: string;
+  sub_type?: string;
+  index?: string;
+  parameters: Array<{
+    type: "text";
+    text: string;
+  }>;
+};
+
 function graphApiVersion() {
   const version = process.env.META_GRAPH_VERSION?.trim() || "v20.0";
   return version.startsWith("v") ? version : `v${version}`;
@@ -83,16 +93,19 @@ export async function sendWhatsAppTemplateMessage({
   to,
   templateName,
   language,
-  variables
+  variables,
+  components
 }: {
   config: IntegrationConfig;
   to: string;
   templateName: string;
   language: string;
   variables?: string[];
+  components?: WhatsAppTemplateComponentPayload[];
 }) {
-  const components =
-    variables && variables.length
+  const templateComponents =
+    components ??
+    (variables && variables.length
       ? [
           {
             type: "body",
@@ -102,7 +115,7 @@ export async function sendWhatsAppTemplateMessage({
             }))
           }
         ]
-      : undefined;
+      : undefined);
 
   return postWhatsAppMessage(config, {
     to: toWhatsAppRecipient(to),
@@ -110,9 +123,68 @@ export async function sendWhatsAppTemplateMessage({
     template: {
       name: templateName,
       language: { code: language },
-      ...(components ? { components } : {})
+      ...(templateComponents ? { components: templateComponents } : {})
     }
   });
+}
+
+export async function fetchWhatsAppTemplateDetails({
+  config,
+  templateName,
+  language
+}: {
+  config: IntegrationConfig;
+  templateName: string;
+  language: string;
+}) {
+  const businessAccountId = config.WHATSAPP_BUSINESS_ACCOUNT_ID?.trim();
+  const accessToken = config.WHATSAPP_ACCESS_TOKEN?.trim();
+  if (!businessAccountId || !accessToken) {
+    return null;
+  }
+
+  const response = await fetch(
+    `https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(
+      businessAccountId
+    )}/message_templates?name=${encodeURIComponent(templateName)}&access_token=${encodeURIComponent(accessToken)}`
+  );
+  const data = (await response.json().catch(() => null)) as {
+    data?: Array<{
+      id?: string;
+      name?: string;
+      language?: string;
+      status?: string;
+      category?: string;
+      components?: unknown[];
+    }>;
+    error?: { message?: string };
+  } | null;
+
+  if (!response.ok) {
+    throw new ApiError(409, "WHATSAPP_TEMPLATE_SYNC_FAILED", data?.error?.message ?? "WhatsApp template sync failed.");
+  }
+
+  const template = (data?.data ?? []).find((item) => item.name === templateName && item.language === language);
+  if (!template) {
+    return null;
+  }
+
+  const bodyComponent = template.components?.find(
+    (component) =>
+      component &&
+      typeof component === "object" &&
+      (component as { type?: string }).type?.toUpperCase() === "BODY"
+  ) as { text?: string } | undefined;
+
+  return {
+    metaTemplateId: template.id ?? null,
+    name: template.name ?? templateName,
+    language: template.language ?? language,
+    status: template.status ?? null,
+    category: template.category ?? null,
+    body: bodyComponent?.text?.trim() || `Approved WhatsApp template: ${templateName}`,
+    components: template.components ?? []
+  };
 }
 
 export async function sendWhatsAppTextMessage({

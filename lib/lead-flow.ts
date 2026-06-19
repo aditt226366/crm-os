@@ -3,14 +3,19 @@ import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { INTEGRATION_DEFINITIONS, type FeatureKey } from "@/lib/constants";
-import { readGoogleSheetLeads, type SheetLead } from "@/lib/google-sheets-leads";
+import { readGoogleSheetLeads, updateGoogleSheetLeadStatuses, type SheetLead } from "@/lib/google-sheets-leads";
 import { createOutboundConversationMessage, normalizePhone, serializeConversation, serializeMessage } from "@/lib/inbox";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
 import { recordUsage } from "@/lib/usage";
 import { emitTenantEvent } from "@/lib/realtime";
-import { renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
+import {
+  fetchWhatsAppTemplateDetails,
+  renderTemplateBody,
+  sendWhatsAppTemplateMessage,
+  type WhatsAppTemplateComponentPayload
+} from "@/lib/whatsapp-cloud";
 
 const FLOW_INTEGRATIONS = ["GOOGLE_SHEETS", "WHATSAPP_CLOUD", "WHATSAPP_TEMPLATE_SETTINGS", "KNOWLEDGE_BASE", "AI_MODEL"] as const;
 
@@ -27,6 +32,7 @@ type LeadTemplate = {
   language: string;
   status: string;
   body: string;
+  components?: unknown;
 };
 
 function integrationMap(integrations: FlowIntegration[]) {
@@ -54,7 +60,8 @@ function configuredTemplate(config: IntegrationConfig): LeadTemplate | null {
     name,
     language: config.WHATSAPP_TEMPLATE_LANGUAGE?.trim() || "en_US",
     status: "APPROVED",
-    body: `Approved WhatsApp template: ${name}`
+    body: `Approved WhatsApp template: ${name}`,
+    components: null
   };
 }
 
@@ -64,7 +71,8 @@ function templateFromRecord(template: WhatsAppTemplate): LeadTemplate {
     name: template.name,
     language: template.language,
     status: template.status,
-    body: template.body
+    body: template.body,
+    components: template.components
   };
 }
 
@@ -130,6 +138,67 @@ function templateVariables(templateBody: string, lead: SheetLead) {
   };
 }
 
+function valueForTemplateKey(key: string, lead: SheetLead, fallbackIndex: number) {
+  const normalized = key.toLowerCase();
+  if (normalized === "1" || normalized.includes("name") || normalized.includes("customer")) {
+    return lead.name || "there";
+  }
+  if (normalized === "2" || normalized.includes("phone") || normalized.includes("number")) {
+    return lead.phone;
+  }
+  if (normalized.includes("status")) {
+    return lead.status || "new";
+  }
+  return lead.row[fallbackIndex] || lead.name || lead.phone;
+}
+
+function textParameters(text: string | undefined, lead: SheetLead) {
+  const keys = Array.from((text ?? "").matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)).map((match) => match[1]);
+  const uniqueKeys = Array.from(new Set(keys));
+  return uniqueKeys.map((key, index) => ({
+    type: "text" as const,
+    text: valueForTemplateKey(key, lead, index)
+  }));
+}
+
+function templateSendComponents(template: LeadTemplate, lead: SheetLead): WhatsAppTemplateComponentPayload[] | undefined {
+  if (!Array.isArray(template.components)) {
+    return undefined;
+  }
+
+  const components: WhatsAppTemplateComponentPayload[] = [];
+  for (const component of template.components) {
+    if (!component || typeof component !== "object") continue;
+    const typed = component as { type?: string; format?: string; text?: string; buttons?: Array<{ type?: string; url?: string; text?: string }> };
+    const type = typed.type?.toUpperCase();
+
+    if (type === "BODY") {
+      const parameters = textParameters(typed.text, lead);
+      if (parameters.length) {
+        components.push({ type: "body", parameters });
+      }
+    }
+
+    if (type === "HEADER" && typed.format?.toUpperCase() === "TEXT") {
+      const parameters = textParameters(typed.text, lead);
+      if (parameters.length) {
+        components.push({ type: "header", parameters });
+      }
+    }
+
+    if (type === "BUTTONS") {
+      for (const [index, button] of (typed.buttons ?? []).entries()) {
+        const parameters = textParameters(button.url ?? button.text, lead);
+        if (button.type?.toUpperCase() === "URL" && parameters.length) {
+          components.push({ type: "button", sub_type: "url", index: String(index), parameters });
+        }
+      }
+    }
+  }
+
+  return components.length ? components : undefined;
+}
+
 async function safeRecordUsage(input: {
   tenantId: string;
   feature: FeatureKey;
@@ -145,6 +214,49 @@ async function safeRecordUsage(input: {
     await recordUsage(input);
   } catch (error) {
     console.error("[lead-flow.usage] failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function normalizedSheetStatus(status: string | null) {
+  return status?.trim().toLowerCase() ?? "";
+}
+
+function shouldMessageSheetLead(lead: SheetLead) {
+  if (lead.statusColumnIndex === null) {
+    return true;
+  }
+
+  const status = normalizedSheetStatus(lead.status);
+  return !status || status === "new";
+}
+
+async function safeMarkSheetLeadMessaged({
+  config,
+  range,
+  lead
+}: {
+  config: IntegrationConfig;
+  range: string;
+  lead: SheetLead;
+}) {
+  if (lead.statusColumnIndex === null) {
+    return { ok: true, skipped: true as const };
+  }
+
+  try {
+    await updateGoogleSheetLeadStatuses({
+      config,
+      range,
+      updates: [{ rowNumber: lead.rowNumber, statusColumnIndex: lead.statusColumnIndex, status: "messaged" }]
+    });
+    return { ok: true, skipped: false as const };
+  } catch (error) {
+    console.error("[lead-flow.sheets] status update failed", error instanceof Error ? error.message : String(error));
+    return {
+      ok: false,
+      skipped: false as const,
+      error: error instanceof Error ? error.message : "Google Sheets status update failed"
+    };
   }
 }
 
@@ -208,34 +320,87 @@ async function syncConfiguredApprovedTemplate(tenantId: string) {
   });
 }
 
+async function syncConfiguredTemplateFromMeta({
+  tenantId,
+  templateSettingsConfig,
+  whatsappConfig
+}: {
+  tenantId: string;
+  templateSettingsConfig: IntegrationConfig;
+  whatsappConfig: IntegrationConfig;
+}) {
+  const configured = configuredTemplate(templateSettingsConfig);
+  if (!configured) {
+    return null;
+  }
+
+  const details = await fetchWhatsAppTemplateDetails({
+    config: whatsappConfig,
+    templateName: configured.name,
+    language: configured.language
+  }).catch((error) => {
+    console.error("[lead-flow.template] Meta sync failed", error instanceof Error ? error.message : String(error));
+    return null;
+  });
+
+  if (!details) {
+    return null;
+  }
+
+  return prisma.whatsAppTemplate.upsert({
+    where: {
+      tenantId_name_language: {
+        tenantId,
+        name: details.name,
+        language: details.language
+      }
+    },
+    create: {
+      tenantId,
+      metaTemplateId: details.metaTemplateId,
+      name: details.name,
+      language: details.language,
+      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
+      status: details.status === "APPROVED" ? "APPROVED" : "PENDING",
+      body: details.body,
+      components: details.components as Prisma.InputJsonValue
+    },
+    update: {
+      metaTemplateId: details.metaTemplateId,
+      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
+      status: details.status === "APPROVED" ? "APPROVED" : "PENDING",
+      body: details.body,
+      components: details.components as Prisma.InputJsonValue
+    }
+  });
+}
+
 export async function leadFlowSummary(tenantId: string) {
   await syncConfiguredApprovedTemplate(tenantId);
-  const [integrations, templates, leads, totals] = await Promise.all([
-    currentFlowIntegrations(tenantId),
-    prisma.whatsAppTemplate.findMany({
-      where: { tenantId, status: "APPROVED" },
-      orderBy: [{ updatedAt: "desc" }],
-      take: 20
-    }),
-    prisma.lead.findMany({
-      where: { tenantId },
-      include: {
-        contact: true,
-        conversation: {
-          include: {
-            messages: { orderBy: { createdAt: "desc" }, take: 1 }
-          }
+  const integrations = await currentFlowIntegrations(tenantId);
+  const templates = await prisma.whatsAppTemplate.findMany({
+    where: { tenantId, status: "APPROVED" },
+    orderBy: [{ updatedAt: "desc" }],
+    take: 20
+  });
+  const leads = await prisma.lead.findMany({
+    where: { tenantId },
+    include: {
+      contact: true,
+      conversation: {
+        include: {
+          messages: { orderBy: { createdAt: "desc" }, take: 1 }
         }
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 30
-    }),
-    prisma.lead.groupBy({
-      by: ["temperature"],
-      where: { tenantId },
-      _count: { _all: true }
-    })
-  ]);
+      }
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 30
+  });
+  const totals = await prisma.lead.groupBy({
+    by: ["temperature"],
+    where: { tenantId },
+    _count: { _all: true }
+  });
 
   const mappedIntegrations = FLOW_INTEGRATIONS.map((type) => {
     const integration = integrations.find((item) => item.type === type);
@@ -378,6 +543,16 @@ async function upsertLeadConversation({ tenantId, lead }: { tenantId: string; le
   return { contact, conversation, lead: crmLead };
 }
 
+async function markCrmLeadContacted(leadId: string) {
+  return prisma.lead.update({
+    where: { id: leadId },
+    data: {
+      status: "CONTACTED",
+      updatedAt: new Date()
+    }
+  });
+}
+
 async function alreadySentTemplate({
   tenantId,
   conversationId,
@@ -436,36 +611,66 @@ export async function runGoogleSheetLeadFlow({
   );
   assertConnected(integrations, "KNOWLEDGE_BASE", "Knowledge base is not connected for this company.");
   assertConnected(integrations, "AI_MODEL", "AI model is not connected for this company.");
+  await syncConfiguredTemplateFromMeta({ tenantId, templateSettingsConfig, whatsappConfig });
 
   const template = await resolveTemplate({ tenantId, templateId, templateSettingsConfig });
+  const sheetRange = range || "A:Z";
   const sheetLeads = await readGoogleSheetLeads({
     config: sheetsConfig,
-    range: range || "A:Z",
+    range: sheetRange,
     maxRows: Math.min(Math.max(maxRows ?? 50, 1), 200)
   });
 
   const results = [];
 
   for (const sheetLead of sheetLeads) {
+    const sheetStatus = normalizedSheetStatus(sheetLead.status);
+    if (!shouldMessageSheetLead(sheetLead)) {
+      results.push({
+        phone: sheetLead.phone,
+        status: "skipped",
+        reason: `Sheet status is ${sheetStatus || "not new"}`,
+        sheetStatus: sheetLead.status ?? null,
+        rowNumber: sheetLead.rowNumber
+      });
+      continue;
+    }
+
     const { contact, conversation } = await upsertLeadConversation({ tenantId, lead: sheetLead });
+    const leadRecord = await prisma.lead.findFirst({
+      where: { tenantId, contactId: contact.id },
+      select: { id: true }
+    });
 
     if (contact.optOut) {
-      results.push({ phone: contact.phone, status: "skipped", reason: "Contact opted out" });
+      results.push({ phone: contact.phone, status: "skipped", reason: "Contact opted out", rowNumber: sheetLead.rowNumber });
       continue;
     }
 
     if (await alreadySentTemplate({ tenantId, conversationId: conversation.id, templateId: template.id })) {
-      results.push({ phone: contact.phone, status: "skipped", reason: "Template already sent" });
+      if (leadRecord) {
+        await markCrmLeadContacted(leadRecord.id);
+      }
+      const sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead });
+      results.push({
+        phone: contact.phone,
+        status: "skipped",
+        reason: sheetUpdate.ok ? "Template already sent" : `Template already sent, but sheet update failed: ${sheetUpdate.error}`,
+        rowNumber: sheetLead.rowNumber,
+        sheetStatus: sheetLead.status ?? null
+      });
       continue;
     }
 
     const variables = templateVariables(template.body, sheetLead);
+    const components = templateSendComponents(template, sheetLead);
     const sendResult = await sendWhatsAppTemplateMessage({
       config: whatsappConfig,
       to: contact.phone,
       templateName: template.name,
       language: template.language,
-      variables: variables.positional
+      variables: components ? undefined : variables.positional,
+      components
     });
     const preview = renderTemplateBody(template.body, variables.named);
     const outbound = await createOutboundConversationMessage({
@@ -514,6 +719,24 @@ export async function runGoogleSheetLeadFlow({
       messageId: outbound.message.id,
       whatsappMessageId: sendResult.whatsappMessageId ?? null
     });
+
+    let sheetUpdate: Awaited<ReturnType<typeof safeMarkSheetLeadMessaged>> | null = null;
+    if (sendResult.ok) {
+      if (leadRecord) {
+        await markCrmLeadContacted(leadRecord.id);
+      }
+      sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead });
+    }
+
+    results[results.length - 1] = {
+      ...results[results.length - 1],
+      rowNumber: sheetLead.rowNumber,
+      sheetStatus: sheetLead.status ?? null,
+      sheetUpdated: sheetUpdate ? sheetUpdate.ok : false,
+      reason:
+        sendResult.error ??
+        (sheetUpdate && !sheetUpdate.ok ? `WhatsApp sent, but sheet update failed: ${sheetUpdate.error}` : null)
+    };
   }
 
   await safeCreateAuditLog({

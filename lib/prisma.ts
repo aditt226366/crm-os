@@ -14,12 +14,24 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 function prismaDatabaseUrl() {
-  const url = process.env.DATABASE_URL;
-  if (!url || process.platform !== "win32") {
+  let url = process.env.DATABASE_URL;
+  if (!url) {
     return url;
   }
 
-  return url.replace(/sslmode=require/g, "sslmode=disable");
+  if (process.platform === "win32") {
+    url = url.replace(/sslmode=require/g, "sslmode=disable");
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has("connection_limit")) {
+      parsed.searchParams.set("connection_limit", "1");
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 if (isProductionRuntime && !globalForPrisma.prismaDbEnvLogged) {

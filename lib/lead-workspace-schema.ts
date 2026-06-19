@@ -184,25 +184,52 @@ const requiredColumns: Record<string, string[]> = {
 
 async function leadWorkspaceSchemaNeedsRepair() {
   const tableNames = Object.keys(requiredColumns);
-  const tableResults = await Promise.all(tableNames.map((tableName) => tableExists(tableName)));
-  if (tableResults.some((exists) => !exists)) {
+  for (const tableName of tableNames) {
+    if (!(await tableExists(tableName))) {
+      return true;
+    }
+  }
+
+  const columnRows = await prisma.$queryRaw<
+    Array<{ tableName: string; columnName: string; isNullable: string; dataType: string; udtName: string }>
+  >`
+    SELECT
+      table_name AS "tableName",
+      column_name AS "columnName",
+      is_nullable AS "isNullable",
+      data_type AS "dataType",
+      udt_name AS "udtName"
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+    AND table_name IN (${Prisma.join(tableNames)});
+  `;
+  const enumRows = await prisma.$queryRaw<Array<{ enumName: string; enumLabel: string }>>`
+    SELECT t.typname AS "enumName", e.enumlabel AS "enumLabel"
+    FROM pg_enum e
+    JOIN pg_type t ON t.oid = e.enumtypid
+    WHERE t.typname IN (${Prisma.join(Object.keys(enumDefinitions))});
+  `;
+
+  const requiredLegacyColumns = new Set(
+    columnRows.filter((row) => row.isNullable === "NO").map((row) => `${row.tableName}.${row.columnName}`)
+  );
+  const legacyColumnsThatBlockCurrentWrites = [
+    "Lead.name",
+    "Lead.phone",
+    "Lead.companyId",
+    "Message.leadId",
+    "Message.content"
+  ];
+  if (legacyColumnsThatBlockCurrentWrites.some((column) => requiredLegacyColumns.has(column))) {
     return true;
   }
 
-  const [columnRows, enumRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ tableName: string; columnName: string }>>`
-      SELECT table_name AS "tableName", column_name AS "columnName"
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-      AND table_name IN (${Prisma.join(tableNames)});
-    `,
-    prisma.$queryRaw<Array<{ enumName: string; enumLabel: string }>>`
-      SELECT t.typname AS "enumName", e.enumlabel AS "enumLabel"
-      FROM pg_enum e
-      JOIN pg_type t ON t.oid = e.enumtypid
-      WHERE t.typname IN (${Prisma.join(Object.keys(enumDefinitions))});
-    `
-  ]);
+  const apiUsageProvider = columnRows.find(
+    (row) => row.tableName === "ApiUsageLog" && row.columnName === "provider"
+  );
+  if (apiUsageProvider && apiUsageProvider.udtName !== "text") {
+    return true;
+  }
 
   const columns = new Set(columnRows.map((row) => `${row.tableName}.${row.columnName}`));
   const enumLabels = new Set(enumRows.map((row) => `${row.enumName}.${row.enumLabel}`));
@@ -365,6 +392,8 @@ const tableRepairStatements = [
   `ALTER TABLE public."Message" ADD COLUMN IF NOT EXISTS "metadata" JSONB;`,
   `ALTER TABLE public."Message" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
   `ALTER TABLE public."Message" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
+  `ALTER TABLE public."Message" ALTER COLUMN "leadId" DROP NOT NULL;`,
+  `ALTER TABLE public."Message" ALTER COLUMN "content" DROP NOT NULL;`,
   `UPDATE public."Message" SET "type" = 'TEXT'::public."MessageType" WHERE "type" IS NULL;`,
   `UPDATE public."Message" SET "status" = 'PENDING'::public."MessageStatus" WHERE "status" IS NULL;`,
   `UPDATE public."Message" SET "body" = '' WHERE "body" IS NULL;`,
@@ -403,6 +432,10 @@ const tableRepairStatements = [
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "assignedUserId" TEXT;`,
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
+  `ALTER TABLE public."Lead" ALTER COLUMN "name" DROP NOT NULL;`,
+  `ALTER TABLE public."Lead" ALTER COLUMN "phone" DROP NOT NULL;`,
+  `ALTER TABLE public."Lead" ALTER COLUMN "companyId" DROP NOT NULL;`,
+  `ALTER TABLE public."Lead" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;`,
   `UPDATE public."Lead" SET "source" = 'ORGANIC'::public."ConversationSource" WHERE "source" IS NULL;`,
   `UPDATE public."Lead" SET "temperature" = 'SCRAP'::public."LeadTemperature" WHERE "temperature" IS NULL;`,
   `UPDATE public."Lead" SET "status" = 'NEW'::public."LeadStatus" WHERE "status" IS NULL;`,
@@ -472,6 +505,7 @@ const tableRepairStatements = [
   `ALTER TABLE public."ApiUsageLog" ADD COLUMN IF NOT EXISTS "status" TEXT;`,
   `ALTER TABLE public."ApiUsageLog" ADD COLUMN IF NOT EXISTS "metadata" JSONB;`,
   `ALTER TABLE public."ApiUsageLog" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
+  `ALTER TABLE public."ApiUsageLog" ALTER COLUMN "provider" TYPE TEXT USING "provider"::TEXT;`,
   `UPDATE public."ApiUsageLog" SET "units" = 1 WHERE "units" IS NULL;`,
   `UPDATE public."ApiUsageLog" SET "cost" = 0 WHERE "cost" IS NULL;`,
   `UPDATE public."ApiUsageLog" SET "createdAt" = NOW() WHERE "createdAt" IS NULL;`,

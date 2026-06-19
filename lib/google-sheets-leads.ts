@@ -6,6 +6,8 @@ import { normalizePhone } from "@/lib/inbox";
 export type SheetLead = {
   phone: string;
   name: string | null;
+  status: string | null;
+  statusColumnIndex: number | null;
   rowNumber: number;
   row: string[];
 };
@@ -29,7 +31,7 @@ async function googleAccessToken(config: IntegrationConfig) {
   }
 
   const key = await importPKCS8(privateKey, "RS256");
-  const assertion = await new SignJWT({ scope: "https://www.googleapis.com/auth/spreadsheets.readonly" })
+  const assertion = await new SignJWT({ scope: "https://www.googleapis.com/auth/spreadsheets" })
     .setProtectedHeader({ alg: "RS256", typ: "JWT" })
     .setIssuer(clientEmail)
     .setSubject(clientEmail)
@@ -64,6 +66,26 @@ function findHeaderIndex(headers: string[], patterns: RegExp[]) {
   return index >= 0 ? index : null;
 }
 
+function a1Column(index: number) {
+  let value = index + 1;
+  let column = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    column = String.fromCharCode(65 + remainder) + column;
+    value = Math.floor((value - 1) / 26);
+  }
+  return column;
+}
+
+function sheetPrefix(range: string) {
+  const bangIndex = range.indexOf("!");
+  return bangIndex >= 0 ? `${range.slice(0, bangIndex)}!` : "";
+}
+
+function statusCellRange(range: string, rowNumber: number, statusColumnIndex: number) {
+  return `${sheetPrefix(range)}${a1Column(statusColumnIndex)}${rowNumber}`;
+}
+
 function phoneFromValue(value: string) {
   const compact = value.trim();
   if (!compact) return null;
@@ -91,6 +113,7 @@ export function extractSheetLeads(values: unknown[][], maxRows: number) {
   const headers = rows[0].map((value) => value.trim().toLowerCase());
   const phoneIndex = findHeaderIndex(headers, [/phone/, /mobile/, /whatsapp/, /^number$/, /contact/]);
   const nameIndex = findHeaderIndex(headers, [/^name$/, /customer/, /client/, /lead/]);
+  const statusIndex = findHeaderIndex(headers, [/^status$/, /message.*status/, /outreach/, /sent/]);
   const startsWithHeader = phoneIndex !== null || nameIndex !== null;
   const dataRows = startsWithHeader ? rows.slice(1) : rows;
   const seen = new Set<string>();
@@ -103,6 +126,8 @@ export function extractSheetLeads(values: unknown[][], maxRows: number) {
     leads.push({
       phone,
       name: cell(row, nameIndex) || null,
+      status: statusIndex === null ? null : cell(row, statusIndex) || null,
+      statusColumnIndex: statusIndex,
       rowNumber: (startsWithHeader ? 2 : 1) + index,
       row
     });
@@ -138,4 +163,50 @@ export async function readGoogleSheetLeads({
   }
 
   return extractSheetLeads(data?.values ?? [], maxRows);
+}
+
+export async function updateGoogleSheetLeadStatuses({
+  config,
+  range = "A:Z",
+  updates
+}: {
+  config: IntegrationConfig;
+  range?: string;
+  updates: Array<{ rowNumber: number; statusColumnIndex: number; status: string }>;
+}) {
+  const spreadsheetId = config.GOOGLE_SHEETS_ID?.trim();
+  if (!spreadsheetId || !updates.length) {
+    return [];
+  }
+
+  const token = await googleAccessToken(config);
+  const results = [];
+
+  for (const update of updates) {
+    const cellRange = statusCellRange(range, update.rowNumber, update.statusColumnIndex);
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(
+        cellRange
+      )}?valueInputOption=USER_ENTERED`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          range: cellRange,
+          majorDimension: "ROWS",
+          values: [[update.status]]
+        })
+      }
+    );
+    const data = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+    if (!response.ok) {
+      throw new ApiError(409, "GOOGLE_SHEETS_UPDATE_FAILED", data?.error?.message ?? "Google Sheets status update failed.");
+    }
+    results.push({ rowNumber: update.rowNumber, statusColumnIndex: update.statusColumnIndex, status: update.status });
+  }
+
+  return results;
 }
