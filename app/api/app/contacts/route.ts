@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { errorResponse, json } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
 function asRecord(value: unknown) {
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "CONTACTS");
     const tenantId = user.tenantId!;
-    await ensureLeadWorkspaceSchema();
+    await Promise.all([ensureIntegrationSchema(), ensureLeadWorkspaceSchema()]);
 
     const [integrations, templates, contacts, broadcasts, sentTemplates] = await Promise.all([
       prisma.integration.findMany({

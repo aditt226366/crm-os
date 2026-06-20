@@ -167,6 +167,15 @@ function metricCards(data: AdsData) {
   ] as const;
 }
 
+async function fetchAdsData() {
+  const response = await fetch("/api/app/ads", { cache: "no-store" });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? "Unable to load Ads.");
+  }
+  return payload as AdsData;
+}
+
 export function AdsPage() {
   const [data, setData] = useState<AdsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -179,19 +188,21 @@ export function AdsPage() {
   const [manualMap, setManualMap] = useState<Record<string, string>>({});
 
   async function load() {
-    const response = await fetch("/api/app/ads", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? "Unable to load Ads.");
-    }
-    setData(payload as AdsData);
+    setData(await fetchAdsData());
   }
 
   useEffect(() => {
     let active = true;
-    load()
-      .catch((error: Error) => active && setNotice({ type: "error", text: error.message }))
-      .finally(() => active && setLoading(false));
+    void fetchAdsData()
+      .then((payload) => {
+        if (active) setData(payload);
+      })
+      .catch((error: Error) => {
+        if (active) setNotice({ type: "error", text: error.message });
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
     };

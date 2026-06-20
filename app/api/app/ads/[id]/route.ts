@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError, errorResponse, json } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -35,6 +37,7 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const { user } = await requireFeature(request, "ADS");
     const tenantId = user.tenantId!;
+    await Promise.all([ensureIntegrationSchema(), ensureLeadWorkspaceSchema()]);
     const { id } = await context.params;
     const campaign = await getTenantCampaign(tenantId, id);
     return json({
@@ -64,6 +67,7 @@ export async function PATCH(request: NextRequest, context: Context) {
   try {
     const { user } = await requireFeature(request, "ADS");
     const tenantId = user.tenantId!;
+    await Promise.all([ensureIntegrationSchema(), ensureLeadWorkspaceSchema()]);
     const { id } = await context.params;
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "").trim();

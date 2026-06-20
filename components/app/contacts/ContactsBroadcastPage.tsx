@@ -174,6 +174,15 @@ function metricCards(data: ContactsData) {
   ] as const;
 }
 
+async function fetchContactsData() {
+  const response = await fetch("/api/app/contacts", { cache: "no-store" });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? "Unable to load contacts workflow.");
+  }
+  return payload as ContactsData;
+}
+
 export function ContactsBroadcastPage() {
   const [data, setData] = useState<ContactsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -191,21 +200,27 @@ export function ContactsBroadcastPage() {
   });
 
   async function load() {
-    const response = await fetch("/api/app/contacts", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? "Unable to load contacts workflow.");
-    }
-    setData(payload as ContactsData);
-    const firstApproved = (payload as ContactsData).templates.find((template) => template.status === "APPROVED");
-    setSelectedTemplateId((current) => current || firstApproved?.id || (payload as ContactsData).templates[0]?.id || "");
+    const payload = await fetchContactsData();
+    setData(payload);
+    const firstApproved = payload.templates.find((template) => template.status === "APPROVED");
+    setSelectedTemplateId((current) => current || firstApproved?.id || payload.templates[0]?.id || "");
   }
 
   useEffect(() => {
     let active = true;
-    load()
-      .catch((error: Error) => active && setNotice({ type: "error", text: error.message }))
-      .finally(() => active && setLoading(false));
+    void fetchContactsData()
+      .then((payload) => {
+        if (!active) return;
+        setData(payload);
+        const firstApproved = payload.templates.find((template) => template.status === "APPROVED");
+        setSelectedTemplateId((current) => current || firstApproved?.id || payload.templates[0]?.id || "");
+      })
+      .catch((error: Error) => {
+        if (active) setNotice({ type: "error", text: error.message });
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
     };

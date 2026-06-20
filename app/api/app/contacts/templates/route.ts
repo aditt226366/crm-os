@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError, errorResponse, json } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { fetchWhatsAppTemplateDetails } from "@/lib/whatsapp-cloud";
@@ -99,7 +100,7 @@ export async function POST(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "CONTACTS");
     const tenantId = user.tenantId!;
-    await ensureLeadWorkspaceSchema();
+    await Promise.all([ensureIntegrationSchema(), ensureLeadWorkspaceSchema()]);
 
     const body = (await request.json()) as Record<string, unknown>;
     const name = String(body.name ?? "").trim();

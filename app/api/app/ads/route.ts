@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError, errorResponse, json } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -36,6 +38,7 @@ export async function GET(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "ADS");
     const tenantId = user.tenantId!;
+    await Promise.all([ensureIntegrationSchema(), ensureLeadWorkspaceSchema()]);
 
     const [integrations, campaigns, conversationsStarted, leadsGenerated, hotLeads, ordersGenerated, humanQueueFromAds] =
       await Promise.all([
@@ -116,6 +119,7 @@ export async function POST(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "ADS");
     const tenantId = user.tenantId!;
+    await Promise.all([ensureIntegrationSchema(), ensureLeadWorkspaceSchema()]);
     const body = (await request.json()) as Record<string, unknown>;
     const name = String(body.name ?? "").trim();
     if (!name) {

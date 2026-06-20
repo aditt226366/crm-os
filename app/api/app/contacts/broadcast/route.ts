@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiError, errorResponse, json } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
 import { createOutboundConversationMessage, serializeConversation, serializeMessage } from "@/lib/inbox";
+import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig } from "@/lib/integration-vault";
 import { renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "CONTACTS");
     const tenantId = user.tenantId!;
-    await ensureLeadWorkspaceSchema();
+    await Promise.all([ensureIntegrationSchema(), ensureLeadWorkspaceSchema()]);
 
     const body = (await request.json()) as { templateId?: unknown; contactIds?: unknown };
     const templateId = String(body.templateId ?? "").trim();
