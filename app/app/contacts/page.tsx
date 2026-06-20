@@ -1,5 +1,5 @@
-import { FeatureRoutePlaceholder } from "@/components/app/FeatureRoutePlaceholder";
+import { ContactsBroadcastPage } from "@/components/app/contacts/ContactsBroadcastPage";
 
 export default function Page() {
-  return <FeatureRoutePlaceholder module="contacts" />;
+  return <ContactsBroadcastPage />;
 }
