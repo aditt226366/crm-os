@@ -3,7 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { INTEGRATION_DEFINITIONS, type FeatureKey } from "@/lib/constants";
-import { readGoogleSheetLeads, updateGoogleSheetLeadStatuses, type SheetLead } from "@/lib/google-sheets-leads";
+import {
+  ensureGoogleSheetStatusColumn,
+  readGoogleSheetLeads,
+  updateGoogleSheetLeadStatuses,
+  type SheetLead
+} from "@/lib/google-sheets-leads";
 import { createOutboundConversationMessage, normalizePhone, serializeConversation, serializeMessage } from "@/lib/inbox";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
@@ -16,6 +21,15 @@ import {
   sendWhatsAppTemplateMessage,
   type WhatsAppTemplateComponentPayload
 } from "@/lib/whatsapp-cloud";
+import {
+  activeMetaDeliveryLimit,
+  activeMetaDeliveryLimitFromMessage,
+  createMetaDeliveryLimit,
+  isMetaDeliveryLimitError,
+  metaDeliveryLimitReason,
+  withContactMetaDeliveryLimit,
+  withMetaDeliveryLimitMetadata
+} from "@/lib/meta-delivery-limit";
 
 const FLOW_INTEGRATIONS = ["GOOGLE_SHEETS", "WHATSAPP_CLOUD", "WHATSAPP_TEMPLATE_SETTINGS", "KNOWLEDGE_BASE", "AI_MODEL"] as const;
 
@@ -221,6 +235,53 @@ function normalizedSheetStatus(status: string | null) {
   return status?.trim().toLowerCase() ?? "";
 }
 
+async function activeMetaDeliveryLimitForContact({
+  tenantId,
+  contactId,
+  customFields
+}: {
+  tenantId: string;
+  contactId: string;
+  customFields: unknown;
+}) {
+  const contactLimit = activeMetaDeliveryLimit(customFields);
+  if (contactLimit) return contactLimit;
+
+  const recentFailures = await prisma.message.findMany({
+    where: {
+      tenantId,
+      contactId,
+      direction: "OUTBOUND",
+      type: "TEMPLATE",
+      status: "FAILED",
+      updatedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 5,
+    select: {
+      id: true,
+      metadata: true,
+      failureReason: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
+
+  for (const failure of recentFailures) {
+    const limit = activeMetaDeliveryLimitFromMessage(failure);
+    if (!limit) continue;
+    await prisma.contact.update({
+      where: { id: contactId },
+      data: {
+        customFields: withContactMetaDeliveryLimit(customFields, limit, failure.id) as Prisma.InputJsonValue
+      }
+    });
+    return limit;
+  }
+
+  return null;
+}
+
 function shouldMessageSheetLead(lead: SheetLead) {
   if (lead.statusColumnIndex === null) {
     return true;
@@ -230,14 +291,16 @@ function shouldMessageSheetLead(lead: SheetLead) {
   return !status || status === "new";
 }
 
-async function safeMarkSheetLeadMessaged({
+async function safeMarkSheetLeadStatus({
   config,
   range,
-  lead
+  lead,
+  status
 }: {
   config: IntegrationConfig;
   range: string;
   lead: SheetLead;
+  status: string;
 }) {
   if (lead.statusColumnIndex === null) {
     return { ok: true, skipped: true as const };
@@ -247,7 +310,7 @@ async function safeMarkSheetLeadMessaged({
     await updateGoogleSheetLeadStatuses({
       config,
       range,
-      updates: [{ rowNumber: lead.rowNumber, statusColumnIndex: lead.statusColumnIndex, status: "messaged" }]
+      updates: [{ rowNumber: lead.rowNumber, statusColumnIndex: lead.statusColumnIndex, status }]
     });
     return { ok: true, skipped: false as const };
   } catch (error) {
@@ -258,6 +321,10 @@ async function safeMarkSheetLeadMessaged({
       error: error instanceof Error ? error.message : "Google Sheets status update failed"
     };
   }
+}
+
+async function safeMarkSheetLeadMessaged(input: Omit<Parameters<typeof safeMarkSheetLeadStatus>[0], "status">) {
+  return safeMarkSheetLeadStatus({ ...input, status: "messaged" });
 }
 
 async function currentFlowIntegrations(tenantId: string) {
@@ -447,14 +514,18 @@ export async function leadFlowSummary(tenantId: string) {
         lastContactedAt: lead.contact.lastContactedAt?.toISOString() ?? null
       },
       conversation: lead.conversation
-        ? {
-            id: lead.conversation.id,
-            status: lead.conversation.status,
-            humanTakeover: lead.conversation.humanTakeover,
-            lastMessageText: lead.conversation.lastMessageText,
-            lastMessageAt: lead.conversation.lastMessageAt?.toISOString() ?? null,
-            lastMessageStatus: lead.conversation.messages[0]?.status ?? null
-          }
+        ? (() => {
+            const latestMessage = lead.conversation.messages[0];
+            const deliveryLimit = activeMetaDeliveryLimitFromMessage(latestMessage);
+            return {
+              id: lead.conversation.id,
+              status: lead.conversation.status,
+              humanTakeover: lead.conversation.humanTakeover,
+              lastMessageText: lead.conversation.lastMessageText,
+              lastMessageAt: lead.conversation.lastMessageAt?.toISOString() ?? null,
+              lastMessageStatus: deliveryLimit ? "META_DELIVERY_LIMITED" : (latestMessage?.status ?? null)
+            };
+          })()
         : null
     }))
   };
@@ -615,10 +686,15 @@ export async function runGoogleSheetLeadFlow({
 
   const template = await resolveTemplate({ tenantId, templateId, templateSettingsConfig });
   const sheetRange = range || "A:Z";
+  await ensureGoogleSheetStatusColumn({
+    config: sheetsConfig,
+    range: sheetRange,
+    defaultStatus: "new"
+  });
   const sheetLeads = await readGoogleSheetLeads({
     config: sheetsConfig,
     range: sheetRange,
-    maxRows: Math.min(Math.max(maxRows ?? 50, 1), 200)
+    maxRows: Math.min(Math.max(maxRows ?? 200, 1), 200)
   });
 
   const results = [];
@@ -647,6 +723,29 @@ export async function runGoogleSheetLeadFlow({
       continue;
     }
 
+    const deliveryLimit = await activeMetaDeliveryLimitForContact({
+      tenantId,
+      contactId: contact.id,
+      customFields: contact.customFields
+    });
+    if (deliveryLimit) {
+      await safeMarkSheetLeadStatus({
+        config: sheetsConfig,
+        range: sheetRange,
+        lead: sheetLead,
+        status: "Meta delivery-limited"
+      });
+      results.push({
+        phone: contact.phone,
+        status: "META_DELIVERY_LIMITED",
+        reason: metaDeliveryLimitReason(deliveryLimit),
+        retryAfter: deliveryLimit.retryAfter,
+        rowNumber: sheetLead.rowNumber,
+        sheetStatus: sheetLead.status ?? null
+      });
+      continue;
+    }
+
     if (await alreadySentTemplate({ tenantId, conversationId: conversation.id, templateId: template.id })) {
       if (leadRecord) {
         await markCrmLeadContacted(leadRecord.id);
@@ -672,7 +771,19 @@ export async function runGoogleSheetLeadFlow({
       variables: components ? undefined : variables.positional,
       components
     });
+    const immediateDeliveryLimit =
+      !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
+        ? createMetaDeliveryLimit({ reason: sendResult.error })
+        : null;
     const preview = renderTemplateBody(template.body, variables.named);
+    const messageMetadata = {
+      sentByUserId: userId,
+      adapter: "lead-google-sheets-flow",
+      templateName: template.name,
+      templateLanguage: template.language,
+      sheetRowNumber: sheetLead.rowNumber,
+      variables: variables.named
+    };
     const outbound = await createOutboundConversationMessage({
       tenantId,
       conversationId: conversation.id,
@@ -682,21 +793,46 @@ export async function runGoogleSheetLeadFlow({
       whatsappMessageId: sendResult.whatsappMessageId,
       status: sendResult.ok ? "PENDING" : "FAILED",
       failureReason: sendResult.error ?? null,
-      metadata: {
-        sentByUserId: userId,
-        adapter: "lead-google-sheets-flow",
-        templateName: template.name,
-        templateLanguage: template.language,
-        sheetRowNumber: sheetLead.rowNumber,
-        variables: variables.named
-      }
+      metadata: (immediateDeliveryLimit
+        ? withMetaDeliveryLimitMetadata(messageMetadata, immediateDeliveryLimit)
+        : messageMetadata) as Prisma.InputJsonObject
     });
+
+    if (immediateDeliveryLimit) {
+      await prisma.contact.update({
+        where: { id: contact.id },
+        data: {
+          customFields: withContactMetaDeliveryLimit(
+            contact.customFields,
+            immediateDeliveryLimit,
+            outbound.message.id
+          ) as Prisma.InputJsonValue
+        }
+      });
+      await safeMarkSheetLeadStatus({
+        config: sheetsConfig,
+        range: sheetRange,
+        lead: sheetLead,
+        status: "Meta delivery-limited"
+      });
+    } else if (!sendResult.ok) {
+      await safeMarkSheetLeadStatus({
+        config: sheetsConfig,
+        range: sheetRange,
+        lead: sheetLead,
+        status: "failed"
+      });
+    }
 
     await safeRecordUsage({
       tenantId,
       feature: "LEAD_MANAGEMENT",
       provider: "meta",
-      eventType: sendResult.ok ? "lead_template.queued" : "lead_template.failed",
+      eventType: sendResult.ok
+        ? "lead_template.queued"
+        : immediateDeliveryLimit
+          ? "lead_template.meta_delivery_limited"
+          : "lead_template.failed",
       endpoint: "/api/app/leads",
       units: 1,
       cost: sendResult.ok ? 0.006 : 0,
@@ -713,8 +849,9 @@ export async function runGoogleSheetLeadFlow({
 
     results.push({
       phone: contact.phone,
-      status: sendResult.ok ? "sent" : "failed",
-      reason: sendResult.error ?? null,
+      status: sendResult.ok ? "sent" : immediateDeliveryLimit ? "META_DELIVERY_LIMITED" : "failed",
+      reason: immediateDeliveryLimit ? metaDeliveryLimitReason(immediateDeliveryLimit) : (sendResult.error ?? null),
+      retryAfter: immediateDeliveryLimit?.retryAfter,
       conversationId: conversation.id,
       messageId: outbound.message.id,
       whatsappMessageId: sendResult.whatsappMessageId ?? null
@@ -734,7 +871,7 @@ export async function runGoogleSheetLeadFlow({
       sheetStatus: sheetLead.status ?? null,
       sheetUpdated: sheetUpdate ? sheetUpdate.ok : false,
       reason:
-        sendResult.error ??
+        (immediateDeliveryLimit ? metaDeliveryLimitReason(immediateDeliveryLimit) : sendResult.error) ??
         (sheetUpdate && !sheetUpdate.ok ? `WhatsApp sent, but sheet update failed: ${sheetUpdate.error}` : null)
     };
   }
@@ -746,11 +883,12 @@ export async function runGoogleSheetLeadFlow({
     entityType: "Lead",
     newValue: {
       range: range || "A:Z",
-      maxRows: maxRows ?? 50,
+      maxRows: maxRows ?? 200,
       scanned: sheetLeads.length,
       sent: results.filter((result) => result.status === "sent").length,
       failed: results.filter((result) => result.status === "failed").length,
-      skipped: results.filter((result) => result.status === "skipped").length
+      skipped: results.filter((result) => result.status === "skipped").length,
+      deliveryLimited: results.filter((result) => result.status === "META_DELIVERY_LIMITED").length
     }
   });
 
@@ -759,6 +897,7 @@ export async function runGoogleSheetLeadFlow({
     sent: results.filter((result) => result.status === "sent").length,
     failed: results.filter((result) => result.status === "failed").length,
     skipped: results.filter((result) => result.status === "skipped").length,
+    deliveryLimited: results.filter((result) => result.status === "META_DELIVERY_LIMITED").length,
     results
   };
 }

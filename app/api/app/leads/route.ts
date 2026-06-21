@@ -7,7 +7,7 @@ import { leadFlowSummary, runGoogleSheetLeadFlow } from "@/lib/lead-flow";
 const leadFlowSchema = z.object({
   templateId: z.string().trim().min(1).optional().or(z.literal("")),
   range: z.string().trim().min(1).max(80).optional().or(z.literal("")),
-  maxRows: z.coerce.number().int().min(1).max(200).optional()
+  maxRows: z.coerce.number().int().min(1).max(200).default(200)
 });
 
 export async function GET(request: NextRequest) {

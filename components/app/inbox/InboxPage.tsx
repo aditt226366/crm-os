@@ -20,6 +20,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
 import { NeonButton } from "@/components/shared/NeonButton";
 import { StatusBadge } from "@/components/shared/StatusBadge";
+import { isMetaDeliveryLimitError } from "@/lib/meta-delivery-limit";
 import { cn } from "@/lib/utils";
 
 type Conversation = {
@@ -124,10 +125,24 @@ function upsertMessage(rows: Message[], incoming: Message) {
   return [...rows, incoming].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 }
 
-function messageStatusIcon(status: string) {
+function messageDisplayStatus(message: Message) {
+  const metadata = message.metadata && typeof message.metadata === "object" && !Array.isArray(message.metadata)
+    ? (message.metadata as Record<string, unknown>)
+    : {};
+  const deliveryLimit = metadata.metaDeliveryLimit && typeof metadata.metaDeliveryLimit === "object"
+    ? (metadata.metaDeliveryLimit as Record<string, unknown>)
+    : null;
+  return deliveryLimit?.status === "META_DELIVERY_LIMITED" || isMetaDeliveryLimitError(message.failureReason)
+    ? "META_DELIVERY_LIMITED"
+    : message.status;
+}
+
+function messageStatusIcon(message: Message) {
+  const status = messageDisplayStatus(message);
   if (status === "READ") return <CheckCheck className="h-3.5 w-3.5 text-cyan-100" />;
   if (status === "DELIVERED") return <CheckCheck className="h-3.5 w-3.5 text-slate-400" />;
   if (status === "SENT") return <Check className="h-3.5 w-3.5 text-slate-400" />;
+  if (status === "META_DELIVERY_LIMITED") return <span className="text-[10px] font-semibold text-amber-100">Meta delivery-limited</span>;
   if (status === "FAILED") return <span className="text-[10px] font-semibold text-rose-200">failed</span>;
   return <Clock className="h-3.5 w-3.5 text-slate-500" />;
 }
@@ -205,7 +220,7 @@ function MessageBubble({ message }: { message: Message }) {
         <p className="whitespace-pre-wrap break-words">{message.body}</p>
         <div className={cn("mt-2 flex items-center gap-2 text-[11px]", outgoing ? "justify-end text-cyan-100/70" : "text-slate-500")}>
           <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-          {outgoing ? messageStatusIcon(message.status) : null}
+          {outgoing ? messageStatusIcon(message) : null}
         </div>
       </div>
     </div>

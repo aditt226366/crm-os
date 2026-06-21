@@ -31,6 +31,7 @@ function emptyDashboardPayload(warning?: string) {
       readRate: 0,
       replyRate: 0,
       failedMessages: 0,
+      metaDeliveryLimitedMessages: 0,
       estimatedApiCost: 0
     },
     charts: {
@@ -93,6 +94,7 @@ export async function GET(request: NextRequest) {
       broadcastsSent,
       messagesSent,
       failedMessages,
+      metaDeliveryLimitedMessages,
       messageStatuses,
       usageCost,
       topLeadSources,
@@ -118,6 +120,17 @@ export async function GET(request: NextRequest) {
       prisma.broadcast.count({ where: { tenantId, status: { in: ["COMPLETED", "SENDING"] } } }),
       prisma.message.count({ where: { tenantId, direction: "OUTBOUND" } }),
       prisma.message.count({ where: { tenantId, status: "FAILED" } }),
+      prisma.message.count({
+        where: {
+          tenantId,
+          status: "FAILED",
+          OR: [
+            { metadata: { path: ["metaDeliveryLimit", "status"], equals: "META_DELIVERY_LIMITED" } },
+            { failureReason: { contains: "healthy ecosystem engagement", mode: "insensitive" } },
+            { failureReason: { contains: "131049" } }
+          ]
+        }
+      }),
       prisma.message.groupBy({
         by: ["status"],
         where: { tenantId, direction: "OUTBOUND" },
@@ -173,6 +186,8 @@ export async function GET(request: NextRequest) {
     const sentOrBetter = statusCount("SENT") + statusCount("DELIVERED") + statusCount("READ");
     const deliveredOrBetter = statusCount("DELIVERED") + statusCount("READ");
     const read = statusCount("READ");
+    const deliveryLimited = Math.min(failedMessages, metaDeliveryLimitedMessages);
+    const standardFailedMessages = Math.max(0, failedMessages - deliveryLimited);
     const inboundMessages = await prisma.message.count({ where: { tenantId, direction: "INBOUND" } });
 
     return json({
@@ -191,7 +206,8 @@ export async function GET(request: NextRequest) {
         deliveryRate: percent(deliveredOrBetter, messagesSent),
         readRate: percent(read, messagesSent),
         replyRate: percent(inboundMessages, messagesSent),
-        failedMessages,
+        failedMessages: standardFailedMessages,
+        metaDeliveryLimitedMessages: deliveryLimited,
         estimatedApiCost: money(usageCost._sum.cost ?? 0)
       },
       charts: {
@@ -205,7 +221,8 @@ export async function GET(request: NextRequest) {
           { label: "Sent", value: sentOrBetter },
           { label: "Delivered", value: deliveredOrBetter },
           { label: "Read", value: read },
-          { label: "Failed", value: failedMessages }
+          { label: "Failed", value: standardFailedMessages },
+          { label: "Meta delivery-limited", value: deliveryLimited }
         ],
         topLeadSources: topLeadSources.map((row) => ({
           label: row.source,

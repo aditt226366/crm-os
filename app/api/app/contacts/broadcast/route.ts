@@ -10,6 +10,15 @@ import { readEncryptedConfig } from "@/lib/integration-vault";
 import { renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
 import { emitTenantEvent } from "@/lib/realtime";
 import { safeCreateAuditLog } from "@/lib/audit";
+import {
+  activeMetaDeliveryLimit,
+  activeMetaDeliveryLimitFromMessage,
+  createMetaDeliveryLimit,
+  isMetaDeliveryLimitError,
+  metaDeliveryLimitReason,
+  withContactMetaDeliveryLimit,
+  withMetaDeliveryLimitMetadata
+} from "@/lib/meta-delivery-limit";
 
 export const maxDuration = 300;
 
@@ -19,6 +28,53 @@ function wait(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+async function activeMetaDeliveryLimitForContact({
+  tenantId,
+  contactId,
+  customFields
+}: {
+  tenantId: string;
+  contactId: string;
+  customFields: unknown;
+}) {
+  const contactLimit = activeMetaDeliveryLimit(customFields);
+  if (contactLimit) return contactLimit;
+
+  const recentFailures = await prisma.message.findMany({
+    where: {
+      tenantId,
+      contactId,
+      direction: "OUTBOUND",
+      type: "TEMPLATE",
+      status: "FAILED",
+      updatedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 5,
+    select: {
+      id: true,
+      metadata: true,
+      failureReason: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
+
+  for (const failure of recentFailures) {
+    const limit = activeMetaDeliveryLimitFromMessage(failure);
+    if (!limit) continue;
+    await prisma.contact.update({
+      where: { id: contactId },
+      data: {
+        customFields: withContactMetaDeliveryLimit(customFields, limit, failure.id) as Prisma.InputJsonValue
+      }
+    });
+    return limit;
+  }
+
+  return null;
 }
 
 async function getOrCreateBroadcastConversation({
@@ -103,6 +159,7 @@ export async function POST(request: NextRequest) {
           sent: 0,
           failed: 0,
           skipped: 0,
+          deliveryLimited: 0,
           gapMs: SEND_GAP_MS
         }
       }
@@ -113,25 +170,49 @@ export async function POST(request: NextRequest) {
       sent: 0,
       failed: 0,
       skipped: 0,
+      deliveryLimited: 0,
       gapMs: SEND_GAP_MS
     };
     const results: Array<{ contactId: string; phone: string; status: string; error?: string | null }> = [];
 
     for (let index = 0; index < contacts.length; index += 1) {
       const contact = contacts[index];
+      const deliveryLimit =
+        contact.optIn && !contact.optOut
+          ? await activeMetaDeliveryLimitForContact({
+              tenantId,
+              contactId: contact.id,
+              customFields: contact.customFields
+            })
+          : null;
       const recipient = await prisma.broadcastRecipient.create({
         data: {
           tenantId,
           broadcastId: broadcast.id,
           contactId: contact.id,
-          status: contact.optIn && !contact.optOut ? "QUEUED" : "SKIPPED",
-          error: contact.optIn && !contact.optOut ? null : "Contact is not opted in or has opted out."
+          status: contact.optIn && !contact.optOut && !deliveryLimit ? "QUEUED" : "SKIPPED",
+          error: deliveryLimit
+            ? metaDeliveryLimitReason(deliveryLimit)
+            : contact.optIn && !contact.optOut
+              ? null
+              : "Contact is not opted in or has opted out."
         }
       });
 
       if (!contact.optIn || contact.optOut) {
         stats.skipped += 1;
         results.push({ contactId: contact.id, phone: contact.phone, status: "SKIPPED", error: "Contact is not opted in or has opted out." });
+        continue;
+      }
+      if (deliveryLimit) {
+        stats.skipped += 1;
+        stats.deliveryLimited += 1;
+        results.push({
+          contactId: contact.id,
+          phone: contact.phone,
+          status: "META_DELIVERY_LIMITED",
+          error: metaDeliveryLimitReason(deliveryLimit)
+        });
         continue;
       }
 
@@ -149,8 +230,20 @@ export async function POST(request: NextRequest) {
         config,
         to: contact.phone,
         templateName: template.name,
-        language: template.language
+        language: template.language,
+        variables: template.body.includes("{{") ? [contact.name] : undefined
       });
+      const immediateDeliveryLimit =
+        !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
+          ? createMetaDeliveryLimit({ reason: sendResult.error })
+          : null;
+      const messageMetadata = {
+        broadcastId: broadcast.id,
+        broadcastRecipientId: recipient.id,
+        templateName: template.name,
+        adapter: "contacts_broadcast",
+        gapMs: SEND_GAP_MS
+      };
 
       const outbound = await createOutboundConversationMessage({
         tenantId,
@@ -161,14 +254,23 @@ export async function POST(request: NextRequest) {
         whatsappMessageId: sendResult.whatsappMessageId,
         status: sendResult.ok ? "SENT" : "FAILED",
         failureReason: sendResult.error ?? null,
-        metadata: {
-          broadcastId: broadcast.id,
-          broadcastRecipientId: recipient.id,
-          templateName: template.name,
-          adapter: "contacts_broadcast",
-          gapMs: SEND_GAP_MS
-        } as Prisma.InputJsonObject
+        metadata: (immediateDeliveryLimit
+          ? withMetaDeliveryLimitMetadata(messageMetadata, immediateDeliveryLimit)
+          : messageMetadata) as Prisma.InputJsonObject
       });
+
+      if (immediateDeliveryLimit) {
+        await prisma.contact.update({
+          where: { id: contact.id },
+          data: {
+            customFields: withContactMetaDeliveryLimit(
+              contact.customFields,
+              immediateDeliveryLimit,
+              outbound.message.id
+            ) as Prisma.InputJsonValue
+          }
+        });
+      }
 
       await prisma.broadcastRecipient.update({
         where: { id: recipient.id },
@@ -182,12 +284,13 @@ export async function POST(request: NextRequest) {
       });
 
       if (sendResult.ok) stats.sent += 1;
+      else if (immediateDeliveryLimit) stats.deliveryLimited += 1;
       else stats.failed += 1;
       results.push({
         contactId: contact.id,
         phone: contact.phone,
-        status: sendResult.ok ? "SENT" : "FAILED",
-        error: sendResult.error ?? null
+        status: sendResult.ok ? "SENT" : immediateDeliveryLimit ? "META_DELIVERY_LIMITED" : "FAILED",
+        error: immediateDeliveryLimit ? metaDeliveryLimitReason(immediateDeliveryLimit) : (sendResult.error ?? null)
       });
 
       const payload = {

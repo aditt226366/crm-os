@@ -403,7 +403,14 @@ async function leadWorkspaceSchemaNeedsRepair() {
     "Lead.phone",
     "Lead.companyId",
     "Message.leadId",
-    "Message.content"
+    "Message.content",
+    "ApiUsageLog.companyId",
+    "ApiUsageLog.endpoint",
+    "ApiUsageLog.method",
+    "ApiUsageLog.statusCode",
+    "ApiUsageLog.success",
+    "ApiUsageLog.requestUnits",
+    "ApiUsageLog.metadata"
   ];
   if (legacyColumnsThatBlockCurrentWrites.some((column) => requiredLegacyColumns.has(column))) {
     return true;
@@ -1042,6 +1049,13 @@ const tableRepairStatements = [
   `ALTER TABLE public."ApiUsageLog" ADD COLUMN IF NOT EXISTS "metadata" JSONB;`,
   `ALTER TABLE public."ApiUsageLog" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
   `ALTER TABLE public."ApiUsageLog" ALTER COLUMN "provider" TYPE TEXT USING "provider"::TEXT;`,
+  dropNotNullIfColumnExists("ApiUsageLog", "companyId"),
+  dropNotNullIfColumnExists("ApiUsageLog", "endpoint"),
+  dropNotNullIfColumnExists("ApiUsageLog", "method"),
+  dropNotNullIfColumnExists("ApiUsageLog", "statusCode"),
+  dropNotNullIfColumnExists("ApiUsageLog", "success"),
+  dropNotNullIfColumnExists("ApiUsageLog", "requestUnits"),
+  dropNotNullIfColumnExists("ApiUsageLog", "metadata"),
   `UPDATE public."ApiUsageLog" SET "units" = 1 WHERE "units" IS NULL;`,
   `UPDATE public."ApiUsageLog" SET "cost" = 0 WHERE "cost" IS NULL;`,
   `UPDATE public."ApiUsageLog" SET "createdAt" = NOW() WHERE "createdAt" IS NULL;`,

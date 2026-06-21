@@ -5,6 +5,7 @@ import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { emitTenantEvent } from "@/lib/realtime";
 import { recordUsage } from "@/lib/usage";
 import { sendWhatsAppTextMessage } from "@/lib/whatsapp-cloud";
+import { syncConversationWorkflowSignals } from "@/lib/conversation-workflow";
 
 type ProviderResult = {
   body: string;
@@ -288,8 +289,14 @@ export async function handleAiAgentInboundReply({
     metadata: { conversationId, messageId: outbound.message.id }
   });
 
+  const workflowConversation = await syncConversationWorkflowSignals({
+    tenantId,
+    conversationId,
+    latestAssistantReply: reply.body
+  });
+
   const payload = {
-    conversation: serializeConversation(outbound.conversation),
+    conversation: serializeConversation(workflowConversation ?? outbound.conversation),
     message: serializeMessage(outbound.message)
   };
   emitTenantEvent(tenantId, "message.created", payload);

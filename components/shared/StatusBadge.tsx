@@ -9,13 +9,15 @@ const styles: Record<string, string> = {
   NOT_CONNECTED: "border-slate-300/10 bg-slate-500/10 text-slate-300",
   ERROR: "border-amber-300/20 bg-amber-300/10 text-amber-100",
   PARTIALLY_CONNECTED: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+  META_DELIVERY_LIMITED: "border-amber-300/25 bg-amber-300/10 text-amber-100",
   STARTER: "border-slate-300/10 bg-white/[0.04] text-slate-200",
   PRO: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
   ENTERPRISE: "border-blue-300/20 bg-blue-300/10 text-blue-100"
 };
 
 const labels: Record<string, string> = {
-  PARTIALLY_CONNECTED: "NEEDS ATTENTION"
+  PARTIALLY_CONNECTED: "NEEDS ATTENTION",
+  META_DELIVERY_LIMITED: "Meta delivery-limited"
 };
 
 export function StatusBadge({ value, className }: { value: string; className?: string }) {

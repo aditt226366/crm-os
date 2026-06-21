@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   CircleAlert,
@@ -82,10 +82,12 @@ type RunResult = {
   sent: number;
   failed: number;
   skipped: number;
+  deliveryLimited?: number;
   results: Array<{
     phone: string;
     status: string;
     reason: string | null;
+    retryAfter?: string;
     conversationId?: string;
     messageId?: string;
     whatsappMessageId?: string | null;
@@ -123,11 +125,13 @@ export function LeadManagementPage() {
   const [data, setData] = useState<LeadData | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [autoSyncing, setAutoSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [templateId, setTemplateId] = useState("");
   const [range, setRange] = useState("A:Z");
-  const [maxRows, setMaxRows] = useState(50);
+  const [maxRows, setMaxRows] = useState(200);
+  const flowRunningRef = useRef(false);
 
   async function load() {
     setError(null);
@@ -166,11 +170,13 @@ export function LeadManagementPage() {
   const ready = useMemo(() => data?.integrations.every((integration) => integration.ready) ?? false, [data]);
   const selectedTemplate = data?.templates.find((template) => template.id === templateId) ?? data?.templates[0] ?? null;
 
-  async function run(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setRunning(true);
+  const runFlow = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (flowRunningRef.current) return;
+    flowRunningRef.current = true;
+    if (silent) setAutoSyncing(true);
+    else setRunning(true);
     setError(null);
-    setResult(null);
+    if (!silent) setResult(null);
     try {
       const response = await fetch("/api/app/leads", {
         method: "POST",
@@ -190,9 +196,26 @@ export function LeadManagementPage() {
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : "Lead flow failed");
     } finally {
-      setRunning(false);
+      if (silent) setAutoSyncing(false);
+      else setRunning(false);
+      flowRunningRef.current = false;
     }
+  }, [maxRows, range, templateId]);
+
+  async function run(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await runFlow();
   }
+
+  useEffect(() => {
+    if (!ready) return;
+    const sync = () => {
+      runFlow({ silent: true }).catch((syncError: Error) => setError(syncError.message));
+    };
+    sync();
+    const interval = window.setInterval(sync, 60_000);
+    return () => window.clearInterval(interval);
+  }, [ready, runFlow]);
 
   return (
     <FeatureGuard featureKey="LEAD_MANAGEMENT">
@@ -202,10 +225,13 @@ export function LeadManagementPage() {
           title="Lead Management"
           description="Google Sheets intake, approved template outreach, and AI-led WhatsApp follow-up for tenant leads."
           actions={
-            <NeonButton type="button" onClick={() => load().catch((loadError: Error) => setError(loadError.message))}>
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </NeonButton>
+            <div className="flex flex-wrap items-center gap-2">
+              {autoSyncing ? <StatusBadge value="AUTO SYNCING" /> : <StatusBadge value="AUTO SYNC ENABLED" />}
+              <NeonButton type="button" onClick={() => load().catch((loadError: Error) => setError(loadError.message))}>
+                <RefreshCw className="h-4 w-4" />
+                Refresh
+              </NeonButton>
+            </div>
           }
         />
 
@@ -325,14 +351,18 @@ export function LeadManagementPage() {
                     <StatusBadge value={`SENT ${result.sent}`} />
                     <StatusBadge value={`FAILED ${result.failed}`} />
                     <StatusBadge value={`SKIPPED ${result.skipped}`} />
+                    {result.deliveryLimited ? <StatusBadge value={`META LIMITED ${result.deliveryLimited}`} /> : null}
                   </div>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   {result.results.slice(0, 8).map((item) => (
                     <div key={`${item.phone}-${item.messageId ?? item.status}`} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
                       <p className="truncate text-sm font-semibold text-white">{item.phone}</p>
-                      <p className="mt-2 text-xs uppercase tracking-wide text-slate-500">{item.status}</p>
+                      <div className="mt-2">
+                        <StatusBadge value={item.status} />
+                      </div>
                       {item.reason ? <p className="mt-2 text-xs leading-5 text-rose-100">{item.reason}</p> : null}
+                      {item.retryAfter ? <p className="mt-2 text-xs leading-5 text-amber-100">Retry after {new Date(item.retryAfter).toLocaleString()}</p> : null}
                     </div>
                   ))}
                 </div>
@@ -355,7 +385,10 @@ export function LeadManagementPage() {
                         </div>
                         <StatusBadge value={lead.temperature} />
                         <StatusBadge value={lead.status} />
-                        <p className="truncate text-sm text-slate-300">{lead.conversation?.lastMessageText ?? lead.source.replaceAll("_", " ")}</p>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-slate-300">{lead.conversation?.lastMessageText ?? lead.source.replaceAll("_", " ")}</p>
+                          {lead.conversation?.lastMessageStatus ? <StatusBadge value={lead.conversation.lastMessageStatus} className="mt-2" /> : null}
+                        </div>
                         <p className="text-right text-xs text-slate-500">{formatDate(lead.conversation?.lastMessageAt ?? lead.updatedAt)}</p>
                       </div>
                     ))}

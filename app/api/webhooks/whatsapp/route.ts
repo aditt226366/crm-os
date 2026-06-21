@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError, errorResponse, json } from "@/lib/api";
 import { upsertInboundConversationMessage, serializeConversation, serializeMessage } from "@/lib/inbox";
@@ -6,6 +7,13 @@ import { emitTenantEvent } from "@/lib/realtime";
 import { whatsappWebhookMessageSchema } from "@/lib/validation";
 import { readEncryptedConfig } from "@/lib/integration-vault";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
+import {
+  createMetaDeliveryLimit,
+  isMetaDeliveryLimitError,
+  withContactMetaDeliveryLimit,
+  withMetaDeliveryLimitMetadata
+} from "@/lib/meta-delivery-limit";
+import { syncConversationWorkflowSignals } from "@/lib/conversation-workflow";
 
 type MetaMessage = {
   id?: string;
@@ -19,7 +27,7 @@ type MetaMessage = {
 type MetaStatus = {
   id?: string;
   status?: string;
-  errors?: Array<{ title?: string; message?: string }>;
+  errors?: Array<{ code?: number | string; title?: string; message?: string; error_data?: { details?: string } }>;
 };
 
 type MetaChangeValue = {
@@ -52,6 +60,15 @@ function messageBody(message: MetaMessage) {
     message.interactive?.button_reply?.title ??
     message.interactive?.list_reply?.title ??
     ""
+  );
+}
+
+function statusFailureReason(status: MetaStatus) {
+  return (
+    status.errors?.[0]?.message ??
+    status.errors?.[0]?.error_data?.details ??
+    status.errors?.[0]?.title ??
+    null
   );
 }
 
@@ -140,9 +157,13 @@ export async function POST(request: NextRequest) {
         source: direct.data.source ?? "ORGANIC",
         sourceId: direct.data.sourceId
       });
+      const workflowConversation = await syncConversationWorkflowSignals({
+        tenantId,
+        conversationId: result.conversation.id
+      });
 
       const payload = {
-        conversation: serializeConversation(result.conversation),
+        conversation: serializeConversation(workflowConversation ?? result.conversation),
         message: serializeMessage(result.message),
         scoring: result.scoring
       };
@@ -171,15 +192,40 @@ export async function POST(request: NextRequest) {
         for (const status of value.statuses ?? []) {
           const mapped = mapMetaStatus(status.status);
           if (!status.id || !mapped) continue;
-          const message = await prisma.message.findFirst({ where: { whatsappMessageId: status.id } });
+          const message = await prisma.message.findFirst({
+            where: { whatsappMessageId: status.id },
+            include: { contact: { select: { customFields: true } } }
+          });
           if (!message) continue;
+          const failureReason = statusFailureReason(status);
+          const deliveryLimit =
+            mapped === "FAILED" && isMetaDeliveryLimitError(status.errors?.[0] ?? failureReason)
+              ? createMetaDeliveryLimit({ reason: failureReason })
+              : null;
           const updated = await prisma.message.update({
             where: { id: message.id },
             data: {
               status: mapped,
-              failureReason: status.errors?.[0]?.message ?? status.errors?.[0]?.title ?? null
+              failureReason,
+              ...(deliveryLimit
+                ? {
+                    metadata: withMetaDeliveryLimitMetadata(message.metadata, deliveryLimit) as Prisma.InputJsonValue
+                  }
+                : {})
             }
           });
+          if (deliveryLimit) {
+            await prisma.contact.update({
+              where: { id: message.contactId },
+              data: {
+                customFields: withContactMetaDeliveryLimit(
+                  message.contact.customFields,
+                  deliveryLimit,
+                  message.id
+                ) as Prisma.InputJsonValue
+              }
+            });
+          }
           emitTenantEvent(message.tenantId, "message.status.updated", serializeMessage(updated));
         }
 
@@ -197,8 +243,12 @@ export async function POST(request: NextRequest) {
             source: message.referral ? "AD" : "ORGANIC",
             sourceId: message.referral?.source_id
           });
+          const workflowConversation = await syncConversationWorkflowSignals({
+            tenantId,
+            conversationId: result.conversation.id
+          });
           const eventPayload = {
-            conversation: serializeConversation(result.conversation),
+            conversation: serializeConversation(workflowConversation ?? result.conversation),
             message: serializeMessage(result.message),
             scoring: result.scoring
           };

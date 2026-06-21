@@ -4,6 +4,7 @@ import { errorResponse, json } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
+import { activeMetaDeliveryLimitFromMessage } from "@/lib/meta-delivery-limit";
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -82,6 +83,7 @@ export async function GET(request: NextRequest) {
         const latestMessage = contact.messages[0];
         const template = latestMessage?.templateId ? templateById.get(latestMessage.templateId) : null;
         const metadata = asRecord(latestMessage?.metadata);
+        const deliveryLimit = activeMetaDeliveryLimitFromMessage(latestMessage);
         return {
           id: contact.id,
           name: contact.name,
@@ -98,7 +100,7 @@ export async function GET(request: NextRequest) {
             ? {
                 name: template?.name ?? String(metadata.templateName ?? "Template"),
                 body: latestMessage.body,
-                status: latestMessage.status,
+                status: deliveryLimit ? "META_DELIVERY_LIMITED" : latestMessage.status,
                 sentAt: latestMessage.createdAt.toISOString()
               }
             : null

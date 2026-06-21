@@ -12,6 +12,16 @@ export type SheetLead = {
   row: string[];
 };
 
+type SheetShape = {
+  rows: string[][];
+  phoneIndex: number | null;
+  nameIndex: number | null;
+  statusIndex: number | null;
+  startsWithHeader: boolean;
+  dataRows: string[][];
+  defaultCountryCode: string | null;
+};
+
 function normalizePrivateKey(value: string) {
   return value
     .replace(/\\r\\n/g, "\n")
@@ -86,49 +96,114 @@ function statusCellRange(range: string, rowNumber: number, statusColumnIndex: nu
   return `${sheetPrefix(range)}${a1Column(statusColumnIndex)}${rowNumber}`;
 }
 
-function phoneFromValue(value: string) {
-  const compact = value.trim();
-  if (!compact) return null;
-  const digits = compact.replace(/\D/g, "");
-  if (digits.length < 8 || digits.length > 15) return null;
-  return normalizePhone(compact);
+function explicitCountryCode(value: string) {
+  const explicit = value.match(/\+\D*(\d[\d\s().-]{7,})/);
+  if (!explicit) return null;
+
+  const digits = explicit[1].replace(/\D/g, "");
+  if (digits.length <= 10 || digits.length > 15) return null;
+  return digits.slice(0, digits.length - 10);
 }
 
-function inferPhone(row: string[], phoneIndex: number | null) {
-  const headerValue = phoneFromValue(cell(row, phoneIndex));
+function inferDefaultCountryCode(rows: string[][], phoneIndex: number | null) {
+  const counts = new Map<string, number>();
+  const candidates = phoneIndex === null ? rows.flat() : rows.map((row) => cell(row, phoneIndex));
+
+  for (const value of candidates) {
+    const countryCode = explicitCountryCode(String(value));
+    if (!countryCode) continue;
+    counts.set(countryCode, (counts.get(countryCode) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
+
+function phoneFromValue(value: string, defaultCountryCode: string | null) {
+  const compact = value.trim();
+  if (!compact) return null;
+  const explicit = compact.match(/\+\D*(\d[\d\s().-]{7,})/);
+  const digits = (explicit?.[1] ?? compact).replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) return null;
+  if (!explicit && defaultCountryCode && digits.length === 10) {
+    return normalizePhone(`+${defaultCountryCode}${digits}`);
+  }
+  return normalizePhone(explicit ? `+${digits}` : compact);
+}
+
+function inferPhone(row: string[], phoneIndex: number | null, defaultCountryCode: string | null) {
+  const headerValue = phoneFromValue(cell(row, phoneIndex), defaultCountryCode);
   if (headerValue) return headerValue;
 
   for (const value of row) {
-    const phone = phoneFromValue(String(value));
+    const raw = String(value);
+    if (!/^\s*(p|phone|mobile|whatsapp)\s*:/i.test(raw)) continue;
+    const phone = phoneFromValue(raw, defaultCountryCode);
+    if (phone) return phone;
+  }
+
+  for (const value of row) {
+    const phone = phoneFromValue(String(value), defaultCountryCode);
     if (phone) return phone;
   }
 
   return null;
 }
 
-export function extractSheetLeads(values: unknown[][], maxRows: number) {
+function sheetShape(values: unknown[][]): SheetShape {
   const rows = values.map((row) => row.map((value) => String(value ?? "")));
-  if (!rows.length) return [];
+  if (!rows.length) {
+    return {
+      rows,
+      phoneIndex: null,
+      nameIndex: null,
+      statusIndex: null,
+      startsWithHeader: false,
+      dataRows: [],
+      defaultCountryCode: null
+    };
+  }
 
   const headers = rows[0].map((value) => value.trim().toLowerCase());
-  const phoneIndex = findHeaderIndex(headers, [/phone/, /mobile/, /whatsapp/, /^number$/, /contact/]);
-  const nameIndex = findHeaderIndex(headers, [/^name$/, /customer/, /client/, /lead/]);
+  const phoneIndex = findHeaderIndex(headers, [/phone/, /mobile/, /whatsapp/, /^number$/, /contact.*number/]);
+  const nameIndex = findHeaderIndex(headers, [
+    /^name$/,
+    /full[_\s-]*name/,
+    /customer[_\s-]*name/,
+    /client[_\s-]*name/,
+    /contact[_\s-]*name/
+  ]);
   const statusIndex = findHeaderIndex(headers, [/^status$/, /message.*status/, /outreach/, /sent/]);
   const startsWithHeader = phoneIndex !== null || nameIndex !== null;
   const dataRows = startsWithHeader ? rows.slice(1) : rows;
+  const defaultCountryCode = inferDefaultCountryCode(dataRows, phoneIndex);
+
+  return {
+    rows,
+    phoneIndex,
+    nameIndex,
+    statusIndex,
+    startsWithHeader,
+    dataRows,
+    defaultCountryCode
+  };
+}
+
+export function extractSheetLeads(values: unknown[][], maxRows: number) {
+  const shape = sheetShape(values);
+  if (!shape.rows.length) return [];
   const seen = new Set<string>();
   const leads: SheetLead[] = [];
 
-  for (const [index, row] of dataRows.entries()) {
-    const phone = inferPhone(row, phoneIndex);
+  for (const [index, row] of shape.dataRows.entries()) {
+    const phone = inferPhone(row, shape.phoneIndex, shape.defaultCountryCode);
     if (!phone || seen.has(phone)) continue;
     seen.add(phone);
     leads.push({
       phone,
-      name: cell(row, nameIndex) || null,
-      status: statusIndex === null ? null : cell(row, statusIndex) || null,
-      statusColumnIndex: statusIndex,
-      rowNumber: (startsWithHeader ? 2 : 1) + index,
+      name: cell(row, shape.nameIndex) || null,
+      status: shape.statusIndex === null ? null : cell(row, shape.statusIndex) || null,
+      statusColumnIndex: shape.statusIndex,
+      rowNumber: (shape.startsWithHeader ? 2 : 1) + index,
       row
     });
     if (leads.length >= maxRows) break;
@@ -137,14 +212,12 @@ export function extractSheetLeads(values: unknown[][], maxRows: number) {
   return leads;
 }
 
-export async function readGoogleSheetLeads({
+async function readGoogleSheetValues({
   config,
-  range = "A:Z",
-  maxRows = 50
+  range
 }: {
   config: IntegrationConfig;
-  range?: string;
-  maxRows?: number;
+  range: string;
 }) {
   const spreadsheetId = config.GOOGLE_SHEETS_ID?.trim();
   if (!spreadsheetId) {
@@ -162,7 +235,144 @@ export async function readGoogleSheetLeads({
     throw new ApiError(409, "GOOGLE_SHEETS_READ_FAILED", data?.error?.message ?? "GOOGLE_SHEETS_ID wrong");
   }
 
-  return extractSheetLeads(data?.values ?? [], maxRows);
+  return { spreadsheetId, token, values: data?.values ?? [] };
+}
+
+async function putGoogleSheetValues({
+  spreadsheetId,
+  token,
+  range,
+  values
+}: {
+  spreadsheetId: string;
+  token: string;
+  range: string;
+  values: string[][];
+}) {
+  const response = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(
+      range
+    )}?valueInputOption=USER_ENTERED`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        range,
+        majorDimension: "ROWS",
+        values
+      })
+    }
+  );
+  const data = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+  if (!response.ok) {
+    throw new ApiError(409, "GOOGLE_SHEETS_UPDATE_FAILED", data?.error?.message ?? "Google Sheets update failed.");
+  }
+}
+
+async function batchPutGoogleSheetValues({
+  spreadsheetId,
+  token,
+  data
+}: {
+  spreadsheetId: string;
+  token: string;
+  data: Array<{ range: string; values: string[][] }>;
+}) {
+  if (!data.length) return;
+
+  const response = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        valueInputOption: "USER_ENTERED",
+        data: data.map((item) => ({
+          range: item.range,
+          majorDimension: "ROWS",
+          values: item.values
+        }))
+      })
+    }
+  );
+  const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+  if (!response.ok) {
+    throw new ApiError(409, "GOOGLE_SHEETS_UPDATE_FAILED", body?.error?.message ?? "Google Sheets update failed.");
+  }
+}
+
+export async function ensureGoogleSheetStatusColumn({
+  config,
+  range = "A:Z",
+  defaultStatus = "new"
+}: {
+  config: IntegrationConfig;
+  range?: string;
+  defaultStatus?: string;
+}) {
+  const { spreadsheetId, token, values } = await readGoogleSheetValues({ config, range });
+  const shape = sheetShape(values);
+  if (!shape.rows.length) {
+    return { statusColumnIndex: null, initializedRows: 0 };
+  }
+
+  const statusColumnIndex =
+    shape.statusIndex ??
+    Math.max(
+      shape.rows[0]?.length ?? 0,
+      ...shape.rows.map((row) => row.length)
+    );
+  const updates: Array<{ rowNumber: number; status: string }> = [];
+
+  if (shape.statusIndex === null && shape.startsWithHeader) {
+    await putGoogleSheetValues({
+      spreadsheetId,
+      token,
+      range: statusCellRange(range, 1, statusColumnIndex),
+      values: [["STATUS"]]
+    });
+  }
+
+  for (const [index, row] of shape.dataRows.entries()) {
+    const phone = inferPhone(row, shape.phoneIndex, shape.defaultCountryCode);
+    if (!phone) continue;
+    const current = cell(row, shape.statusIndex ?? statusColumnIndex);
+    if (current) continue;
+    updates.push({
+      rowNumber: (shape.startsWithHeader ? 2 : 1) + index,
+      status: defaultStatus
+    });
+  }
+
+  await batchPutGoogleSheetValues({
+    spreadsheetId,
+    token,
+    data: updates.map((update) => ({
+      range: statusCellRange(range, update.rowNumber, statusColumnIndex),
+      values: [[update.status]]
+    }))
+  });
+
+  return { statusColumnIndex, initializedRows: updates.length };
+}
+
+export async function readGoogleSheetLeads({
+  config,
+  range = "A:Z",
+  maxRows = 50
+}: {
+  config: IntegrationConfig;
+  range?: string;
+  maxRows?: number;
+}) {
+  const { values } = await readGoogleSheetValues({ config, range });
+  return extractSheetLeads(values, maxRows);
 }
 
 export async function updateGoogleSheetLeadStatuses({
@@ -180,33 +390,18 @@ export async function updateGoogleSheetLeadStatuses({
   }
 
   const token = await googleAccessToken(config);
-  const results = [];
+  await batchPutGoogleSheetValues({
+    spreadsheetId,
+    token,
+    data: updates.map((update) => ({
+      range: statusCellRange(range, update.rowNumber, update.statusColumnIndex),
+      values: [[update.status]]
+    }))
+  });
 
-  for (const update of updates) {
-    const cellRange = statusCellRange(range, update.rowNumber, update.statusColumnIndex);
-    const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(
-        cellRange
-      )}?valueInputOption=USER_ENTERED`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          range: cellRange,
-          majorDimension: "ROWS",
-          values: [[update.status]]
-        })
-      }
-    );
-    const data = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
-    if (!response.ok) {
-      throw new ApiError(409, "GOOGLE_SHEETS_UPDATE_FAILED", data?.error?.message ?? "Google Sheets status update failed.");
-    }
-    results.push({ rowNumber: update.rowNumber, statusColumnIndex: update.statusColumnIndex, status: update.status });
-  }
-
-  return results;
+  return updates.map((update) => ({
+    rowNumber: update.rowNumber,
+    statusColumnIndex: update.statusColumnIndex,
+    status: update.status
+  }));
 }

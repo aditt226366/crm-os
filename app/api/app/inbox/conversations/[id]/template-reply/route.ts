@@ -9,8 +9,62 @@ import { recordUsage } from "@/lib/usage";
 import { writeAuditLog } from "@/lib/audit";
 import { readEncryptedConfig } from "@/lib/integration-vault";
 import { renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
+import {
+  activeMetaDeliveryLimit,
+  activeMetaDeliveryLimitFromMessage,
+  createMetaDeliveryLimit,
+  isMetaDeliveryLimitError,
+  metaDeliveryLimitReason,
+  withContactMetaDeliveryLimit,
+  withMetaDeliveryLimitMetadata
+} from "@/lib/meta-delivery-limit";
 
 type Context = { params: Promise<{ id: string }> };
+
+async function activeMetaDeliveryLimitForContact({
+  tenantId,
+  contactId,
+  customFields
+}: {
+  tenantId: string;
+  contactId: string;
+  customFields: unknown;
+}) {
+  const contactLimit = activeMetaDeliveryLimit(customFields);
+  if (contactLimit) return contactLimit;
+
+  const recentFailures = await prisma.message.findMany({
+    where: {
+      tenantId,
+      contactId,
+      direction: "OUTBOUND",
+      type: "TEMPLATE",
+      status: "FAILED",
+      updatedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 5,
+    select: {
+      id: true,
+      metadata: true,
+      failureReason: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
+
+  for (const failure of recentFailures) {
+    const limit = activeMetaDeliveryLimitFromMessage(failure);
+    if (!limit) continue;
+    await prisma.contact.update({
+      where: { id: contactId },
+      data: { customFields: withContactMetaDeliveryLimit(customFields, limit, failure.id) }
+    });
+    return limit;
+  }
+
+  return null;
+}
 
 export async function POST(request: NextRequest, context: Context) {
   try {
@@ -22,6 +76,14 @@ export async function POST(request: NextRequest, context: Context) {
 
     if (conversation.contact.optOut) {
       throw new ApiError(403, "CONTACT_OPTED_OUT", "This contact opted out. Template messages are blocked.");
+    }
+    const deliveryLimit = await activeMetaDeliveryLimitForContact({
+      tenantId,
+      contactId: conversation.contactId,
+      customFields: conversation.contact.customFields
+    });
+    if (deliveryLimit) {
+      throw new ApiError(429, "META_DELIVERY_LIMITED", metaDeliveryLimitReason(deliveryLimit));
     }
 
     const [integration, template] = await Promise.all([
@@ -59,7 +121,12 @@ export async function POST(request: NextRequest, context: Context) {
       language: template.language,
       variables: variableValues.length ? variableValues : undefined
     });
+    const immediateDeliveryLimit =
+      !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
+        ? createMetaDeliveryLimit({ reason: sendResult.error })
+        : null;
     const renderedBody = body.body || renderTemplateBody(template.body, variables);
+    const messageMetadata = { sentByUserId: user.id, templateName: template.name, variables };
 
     const result = await createOutboundConversationMessage({
       tenantId,
@@ -70,14 +137,29 @@ export async function POST(request: NextRequest, context: Context) {
       whatsappMessageId: sendResult.whatsappMessageId,
       status: sendResult.ok ? "PENDING" : "FAILED",
       failureReason: sendResult.error ?? null,
-      metadata: { sentByUserId: user.id, templateName: template.name, variables }
+      metadata: immediateDeliveryLimit
+        ? withMetaDeliveryLimitMetadata(messageMetadata, immediateDeliveryLimit)
+        : messageMetadata
     });
+
+    if (immediateDeliveryLimit) {
+      await prisma.contact.update({
+        where: { id: conversation.contactId },
+        data: {
+          customFields: withContactMetaDeliveryLimit(
+            conversation.contact.customFields,
+            immediateDeliveryLimit,
+            result.message.id
+          )
+        }
+      });
+    }
 
     await recordUsage({
       tenantId,
       feature: "TEMPLATES",
       provider: "meta",
-      eventType: sendResult.ok ? "template.queued" : "template.failed",
+      eventType: sendResult.ok ? "template.queued" : immediateDeliveryLimit ? "template.meta_delivery_limited" : "template.failed",
       endpoint: `/api/app/inbox/conversations/${id}/template-reply`,
       units: 1,
       cost: sendResult.ok ? 0.006 : 0,
