@@ -96,6 +96,10 @@ const filters = [
   ["ads", "Ads"]
 ] as const;
 
+type InboxFilter = (typeof filters)[number][0];
+
+const confirmedOrderStatuses = new Set(["CONFIRMED", "DISPATCHED", "COMPLETED"]);
+
 function relativeTime(value: string | null) {
   if (!value) return "";
   const date = new Date(value);
@@ -123,6 +127,25 @@ function upsertMessage(rows: Message[], incoming: Message) {
     return rows.map((row) => (row.id === incoming.id ? incoming : row));
   }
   return [...rows, incoming].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+}
+
+function conversationMessageCount(conversation: Conversation) {
+  return conversation.totalMessageCount || conversation.contact.totalMessageCount || 0;
+}
+
+function matchesActiveFilter(conversation: Conversation, filter: string) {
+  const messageCount = conversationMessageCount(conversation);
+  if (filter === "all") return true;
+  if (filter === "unread") return conversation.unreadCount > 0;
+  if (filter === "hot") return messageCount >= 6;
+  if (filter === "warm") return messageCount >= 2 && messageCount <= 5;
+  if (filter === "scrap") return messageCount <= 2;
+  if (filter === "human-queue") return conversation.humanTakeover || Boolean(conversation.humanQueue);
+  if (filter === "orders") return Boolean(conversation.order && confirmedOrderStatuses.has(conversation.order.status));
+  if (filter === "broadcast") return conversation.source === "BROADCAST";
+  if (filter === "campaign") return conversation.source === "CAMPAIGN";
+  if (filter === "ads") return conversation.source === "AD";
+  return true;
 }
 
 function messageDisplayStatus(message: Message) {
@@ -400,7 +423,7 @@ export function InboxPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState<InboxFilter>("all");
   const [query, setQuery] = useState("");
   const [loadingList, setLoadingList] = useState(true);
   const [loadingThread, setLoadingThread] = useState(false);
@@ -411,6 +434,10 @@ export function InboxPage() {
   const selected = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedId) ?? null,
     [conversations, selectedId]
+  );
+  const visibleConversations = useMemo(
+    () => conversations.filter((conversation) => matchesActiveFilter(conversation, filter)),
+    [conversations, filter]
   );
 
   const serviceWindowClosed = useMemo(() => {
@@ -486,6 +513,9 @@ export function InboxPage() {
       setMessages((current) =>
         data.payload.message.conversationId === selectedId ? upsertMessage(current, data.payload.message) : current
       );
+      if (data.payload.message.conversationId === selectedId && data.payload.message.direction === "INBOUND") {
+        void loadConversation(selectedId);
+      }
       setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }), 0);
     });
     events.addEventListener("conversation.updated", (event) => {
@@ -497,7 +527,7 @@ export function InboxPage() {
       setMessages((current) => current.map((message) => (message.id === data.payload.id ? data.payload : message)));
     });
     return () => events.close();
-  }, [selectedId]);
+  }, [loadConversation, selectedId]);
 
   async function postAction(path: string, payload?: unknown) {
     const response = await fetch(path, {
@@ -611,9 +641,9 @@ export function InboxPage() {
             <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
               {loadingList ? (
                 <LoadingSkeleton rows={8} />
-              ) : conversations.length ? (
+              ) : visibleConversations.length ? (
                 <div className="space-y-2">
-                  {conversations.map((conversation) => (
+                  {visibleConversations.map((conversation) => (
                     <ConversationRow
                       key={conversation.id}
                       conversation={conversation}

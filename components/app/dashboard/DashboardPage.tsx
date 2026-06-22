@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowDownLeft,
+  ArrowUpRight,
   Bot,
   CircleAlert,
   Clock3,
   Flame,
+  MessagesSquare,
   ThermometerSun,
   Users
 } from "lucide-react";
@@ -32,13 +35,17 @@ type DashboardData = {
     | "deliveryRate"
     | "readRate"
     | "replyRate"
-    | "failedMessages",
+    | "failedMessages"
+    | "inboundMessages"
+    | "outboundMessages"
+    | "totalConversationMessages",
     number
   >;
   charts: {
     leadFunnel: Array<{ label: string; value: number }>;
     campaignPerformance: Array<{ label: string; status: string; value: number }>;
     messageStatus: Array<{ label: string; value: number }>;
+    messageDirection: Array<{ label: string; value: number }>;
     topLeadSources: Array<{ label: string; value: number }>;
     handling: Array<{ label: string; value: number }>;
   };
@@ -161,6 +168,27 @@ export function DashboardPage() {
         {metricCards.map(([label, value, icon, detail]) => (
           <DashboardMetricCard key={label} label={label} value={value} icon={icon} detail={detail} />
         ))}
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <DashboardMetricCard
+          label="Inbound Messages"
+          value={data.metrics.inboundMessages}
+          icon={ArrowDownLeft}
+          detail="Customer messages"
+        />
+        <DashboardMetricCard
+          label="Outbound Messages"
+          value={data.metrics.outboundMessages}
+          icon={ArrowUpRight}
+          detail="Agent and automation messages"
+        />
+        <DashboardMetricCard
+          label="Conversation Messages"
+          value={data.metrics.totalConversationMessages}
+          icon={MessagesSquare}
+          detail="Inbound plus outbound"
+        />
       </section>
 
       <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">

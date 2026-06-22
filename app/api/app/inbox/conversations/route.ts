@@ -6,6 +6,9 @@ import { errorResponse, json } from "@/lib/api";
 import { serializeConversation } from "@/lib/inbox";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
+const confirmedOrderStatuses = ["CONFIRMED", "DISPATCHED", "COMPLETED"] as const;
+const messageCountedTypes = ["NOTE", "SYSTEM"] as const;
+
 function parseTake(value: string | null) {
   if (!value) return undefined;
   const take = Number(value);
@@ -42,9 +45,6 @@ export async function GET(request: NextRequest) {
     if (filter === "assigned") {
       and.push({ assignedUserId: user.id });
     }
-    if (filter === "hot" || filter === "warm" || filter === "scrap") {
-      and.push({ contact: { is: { leadTemperature: filter.toUpperCase() as "HOT" | "WARM" | "SCRAP" } } });
-    }
     if (filter === "human-queue") {
       and.push({
         OR: [
@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
       });
     }
     if (filter === "orders") {
-      and.push({ orders: { some: {} } });
+      and.push({ orders: { some: { status: { in: [...confirmedOrderStatuses] } } } });
     }
     if (filter === "broadcast" || filter === "campaign" || filter === "ads") {
       and.push({ source: filter === "ads" ? "AD" : filter.toUpperCase() as "BROADCAST" | "CAMPAIGN" });
@@ -69,14 +69,36 @@ export async function GET(request: NextRequest) {
       include: {
         contact: true,
         queueItems: { where: { status: { in: ["OPEN", "ASSIGNED"] } }, orderBy: { priority: "desc" }, take: 1 },
-        orders: { orderBy: { createdAt: "desc" }, take: 1 }
+        orders: {
+          ...(filter === "orders" ? { where: { status: { in: [...confirmedOrderStatuses] } } } : {}),
+          orderBy: { createdAt: "desc" },
+          take: 1
+        },
+        _count: {
+          select: {
+            messages: { where: { type: { notIn: [...messageCountedTypes] } } }
+          }
+        }
       },
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
-      ...(take === undefined ? {} : { take })
     });
 
+    const filteredConversations = conversations.filter((conversation) => {
+      const messageCount = conversation._count.messages;
+      if (filter === "hot") return messageCount >= 6;
+      if (filter === "warm") return messageCount >= 2 && messageCount <= 5;
+      if (filter === "scrap") return messageCount <= 2;
+      return true;
+    });
+    const limitedConversations = take === undefined ? filteredConversations : filteredConversations.slice(0, take);
+
     return json({
-      conversations: conversations.map(serializeConversation)
+      conversations: limitedConversations.map((conversation) =>
+        serializeConversation({
+          ...conversation,
+          totalMessageCount: conversation._count.messages
+        })
+      )
     });
   } catch (error) {
     return errorResponse(error);

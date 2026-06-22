@@ -10,15 +10,39 @@ export async function GET(request: NextRequest, context: Context) {
   try {
     const { user } = await requireFeature(request, "INBOX");
     const { id } = await context.params;
-    const conversation = await getTenantConversation(user.tenantId!, id);
-    const messages = await prisma.message.findMany({
-      where: { tenantId: user.tenantId!, conversationId: id },
-      orderBy: { createdAt: "desc" },
-      take: 40
-    });
+    const existingConversation = await getTenantConversation(user.tenantId!, id);
+    const conversation =
+      existingConversation.unreadCount > 0
+        ? await prisma.conversation.update({
+            where: { id: existingConversation.id },
+            data: { unreadCount: 0 },
+            include: {
+              contact: true,
+              queueItems: { orderBy: [{ status: "asc" }, { priority: "desc" }] },
+              orders: { orderBy: { createdAt: "desc" }, take: 1 }
+            }
+          })
+        : existingConversation;
+    const [messages, messageCount] = await Promise.all([
+      prisma.message.findMany({
+        where: { tenantId: user.tenantId!, conversationId: id },
+        orderBy: { createdAt: "desc" },
+        take: 40
+      }),
+      prisma.message.count({
+        where: {
+          tenantId: user.tenantId!,
+          conversationId: id,
+          type: { notIn: ["NOTE", "SYSTEM"] }
+        }
+      })
+    ]);
 
     return json({
-      conversation: serializeConversation(conversation),
+      conversation: serializeConversation({
+        ...conversation,
+        totalMessageCount: messageCount
+      }),
       messages: messages.reverse().map(serializeMessage)
     });
   } catch (error) {

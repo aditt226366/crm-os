@@ -32,6 +32,9 @@ function emptyDashboardPayload(warning?: string) {
       replyRate: 0,
       failedMessages: 0,
       metaDeliveryLimitedMessages: 0,
+      inboundMessages: 0,
+      outboundMessages: 0,
+      totalConversationMessages: 0,
       estimatedApiCost: 0
     },
     charts: {
@@ -46,6 +49,10 @@ function emptyDashboardPayload(warning?: string) {
         { label: "Delivered", value: 0 },
         { label: "Read", value: 0 },
         { label: "Failed", value: 0 }
+      ],
+      messageDirection: [
+        { label: "Inbound", value: 0 },
+        { label: "Outbound", value: 0 }
       ],
       topLeadSources: [],
       handling: [
@@ -95,6 +102,7 @@ export async function GET(request: NextRequest) {
       messagesSent,
       failedMessages,
       metaDeliveryLimitedMessages,
+      inboundMessages,
       messageStatuses,
       usageCost,
       topLeadSources,
@@ -118,12 +126,13 @@ export async function GET(request: NextRequest) {
       prisma.order.count({ where: { tenantId } }),
       prisma.campaign.count({ where: { tenantId, status: { in: ["RUNNING", "SCHEDULED"] } } }),
       prisma.broadcast.count({ where: { tenantId, status: { in: ["COMPLETED", "SENDING"] } } }),
-      prisma.message.count({ where: { tenantId, direction: "OUTBOUND" } }),
-      prisma.message.count({ where: { tenantId, status: "FAILED" } }),
+      prisma.message.count({ where: { tenantId, direction: "OUTBOUND", type: { notIn: ["NOTE", "SYSTEM"] } } }),
+      prisma.message.count({ where: { tenantId, status: "FAILED", type: { notIn: ["NOTE", "SYSTEM"] } } }),
       prisma.message.count({
         where: {
           tenantId,
           status: "FAILED",
+          type: { notIn: ["NOTE", "SYSTEM"] },
           OR: [
             { metadata: { path: ["metaDeliveryLimit", "status"], equals: "META_DELIVERY_LIMITED" } },
             { failureReason: { contains: "healthy ecosystem engagement", mode: "insensitive" } },
@@ -131,9 +140,10 @@ export async function GET(request: NextRequest) {
           ]
         }
       }),
+      prisma.message.count({ where: { tenantId, direction: "INBOUND", type: { notIn: ["NOTE", "SYSTEM"] } } }),
       prisma.message.groupBy({
         by: ["status"],
-        where: { tenantId, direction: "OUTBOUND" },
+        where: { tenantId, direction: "OUTBOUND", type: { notIn: ["NOTE", "SYSTEM"] } },
         _count: { _all: true }
       }),
       prisma.apiUsageLog.aggregate({
@@ -188,7 +198,8 @@ export async function GET(request: NextRequest) {
     const read = statusCount("READ");
     const deliveryLimited = Math.min(failedMessages, metaDeliveryLimitedMessages);
     const standardFailedMessages = Math.max(0, failedMessages - deliveryLimited);
-    const inboundMessages = await prisma.message.count({ where: { tenantId, direction: "INBOUND" } });
+    const outboundMessages = messagesSent;
+    const totalConversationMessages = inboundMessages + outboundMessages;
 
     return json({
       metrics: {
@@ -208,6 +219,9 @@ export async function GET(request: NextRequest) {
         replyRate: percent(inboundMessages, messagesSent),
         failedMessages: standardFailedMessages,
         metaDeliveryLimitedMessages: deliveryLimited,
+        inboundMessages,
+        outboundMessages,
+        totalConversationMessages,
         estimatedApiCost: money(usageCost._sum.cost ?? 0)
       },
       charts: {
@@ -223,6 +237,10 @@ export async function GET(request: NextRequest) {
           { label: "Read", value: read },
           { label: "Failed", value: standardFailedMessages },
           { label: "Meta delivery-limited", value: deliveryLimited }
+        ],
+        messageDirection: [
+          { label: "Inbound", value: inboundMessages },
+          { label: "Outbound", value: outboundMessages }
         ],
         topLeadSources: topLeadSources.map((row) => ({
           label: row.source,
