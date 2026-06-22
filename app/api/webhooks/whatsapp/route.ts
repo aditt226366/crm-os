@@ -6,10 +6,12 @@ import { upsertInboundConversationMessage, serializeConversation, serializeMessa
 import { emitTenantEvent } from "@/lib/realtime";
 import { whatsappWebhookMessageSchema } from "@/lib/validation";
 import { readEncryptedConfig } from "@/lib/integration-vault";
+import { readGoogleSheetLeads, updateGoogleSheetLeadStatuses } from "@/lib/google-sheets-leads";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
 import {
   createMetaDeliveryLimit,
   isMetaDeliveryLimitError,
+  META_DELIVERY_LIMIT_DISPLAY,
   withContactMetaDeliveryLimit,
   withMetaDeliveryLimitMetadata
 } from "@/lib/meta-delivery-limit";
@@ -64,12 +66,75 @@ function messageBody(message: MetaMessage) {
 }
 
 function statusFailureReason(status: MetaStatus) {
-  return (
-    status.errors?.[0]?.message ??
-    status.errors?.[0]?.error_data?.details ??
-    status.errors?.[0]?.title ??
-    null
-  );
+  const error = status.errors?.[0];
+  if (!error) return null;
+  return [
+    error.message,
+    error.error_data?.details,
+    error.title,
+    error.code === undefined ? null : `code ${error.code}`
+  ].filter(Boolean).join(" | ") || null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function metadataString(metadata: unknown, key: string) {
+  const value = asRecord(metadata)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function metadataNumber(metadata: unknown, key: string) {
+  const value = asRecord(metadata)[key];
+  const numberValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(numberValue) ? numberValue : null;
+}
+
+async function updateLeadSheetStatusFromWebhook({
+  tenantId,
+  metadata,
+  status
+}: {
+  tenantId: string;
+  metadata: unknown;
+  status: string;
+}) {
+  if (metadataString(metadata, "adapter") !== "lead-google-sheets-flow") return;
+
+  const rowNumber = metadataNumber(metadata, "sheetRowNumber");
+  const range = metadataString(metadata, "sheetRange") || "A:Z";
+  let statusColumnIndex = metadataNumber(metadata, "sheetStatusColumnIndex");
+  if (!rowNumber || rowNumber <= 0) return;
+
+  const integration = await prisma.integration.findUnique({
+    where: { tenantId_type: { tenantId, type: "GOOGLE_SHEETS" } },
+    select: { status: true, encryptedConfig: true }
+  });
+  if (integration?.status !== "CONNECTED") return;
+
+  const config = readEncryptedConfig(integration.encryptedConfig);
+  if (statusColumnIndex === null || statusColumnIndex < 0) {
+    const maxRows = Math.max(1000, rowNumber);
+    const leads = await readGoogleSheetLeads({ config, range, maxRows });
+    statusColumnIndex = leads.find((lead) => lead.rowNumber === rowNumber)?.statusColumnIndex ?? null;
+  }
+  if (statusColumnIndex === null || statusColumnIndex < 0) return;
+
+  try {
+    await updateGoogleSheetLeadStatuses({
+      config,
+      range,
+      updates: [{ rowNumber, statusColumnIndex, status }]
+    });
+  } catch (error) {
+    console.error("[webhook.sheets] lead status update failed", {
+      tenantId,
+      rowNumber,
+      status,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 async function resolveTenantId({
@@ -224,6 +289,21 @@ export async function POST(request: NextRequest) {
                   message.id
                 ) as Prisma.InputJsonValue
               }
+            });
+          }
+          const sheetStatus =
+            deliveryLimit
+              ? META_DELIVERY_LIMIT_DISPLAY
+              : mapped === "FAILED"
+                ? "failure"
+                : mapped === "SENT" || mapped === "DELIVERED" || mapped === "READ"
+                  ? "messaged"
+                  : null;
+          if (sheetStatus) {
+            await updateLeadSheetStatusFromWebhook({
+              tenantId: message.tenantId,
+              metadata: updated.metadata,
+              status: sheetStatus
             });
           }
           emitTenantEvent(message.tenantId, "message.status.updated", serializeMessage(updated));

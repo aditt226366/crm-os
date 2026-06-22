@@ -33,6 +33,7 @@ import {
 } from "@/lib/meta-delivery-limit";
 
 const FLOW_INTEGRATIONS = ["GOOGLE_SHEETS", "WHATSAPP_CLOUD", "WHATSAPP_TEMPLATE_SETTINGS", "KNOWLEDGE_BASE", "AI_MODEL"] as const;
+const DEFAULT_SEND_GAP_MS = 6000;
 
 type FlowIntegration = {
   type: IntegrationType;
@@ -49,6 +50,18 @@ type LeadTemplate = {
   body: string;
   components?: unknown;
 };
+
+function configuredLeadSendGapMs() {
+  const value = Number(process.env.LEAD_SHEET_SEND_GAP_MS);
+  if (!Number.isFinite(value) || value < 0) return DEFAULT_SEND_GAP_MS;
+  return Math.min(Math.round(value), 60_000);
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function integrationMap(integrations: FlowIntegration[]) {
   return new Map(integrations.map((integration) => [integration.type, integration]));
@@ -326,10 +339,6 @@ async function safeMarkSheetLeadStatus({
 
 async function safeMarkSheetLeadMessaged(input: Omit<Parameters<typeof safeMarkSheetLeadStatus>[0], "status">) {
   return safeMarkSheetLeadStatus({ ...input, status: "messaged" });
-}
-
-function sheetFailureStatus(reason: string | null | undefined) {
-  return reason?.trim() || "WhatsApp send failed";
 }
 
 async function currentFlowIntegrations(tenantId: string) {
@@ -703,6 +712,8 @@ export async function runGoogleSheetLeadFlow({
   });
 
   const results = [];
+  const sendGapMs = configuredLeadSendGapMs();
+  let attemptedSends = 0;
 
   for (const sheetLead of sheetLeads) {
     const sheetStatus = normalizedSheetStatus(sheetLead.status);
@@ -728,7 +739,7 @@ export async function runGoogleSheetLeadFlow({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: sheetFailureStatus("Contact opted out")
+        status: "failure"
       });
       results.push({ phone: contact.phone, status: "skipped", reason: "Contact opted out", rowNumber: sheetLead.rowNumber });
       continue;
@@ -775,6 +786,10 @@ export async function runGoogleSheetLeadFlow({
 
     const variables = templateVariables(template.body, sheetLead);
     const components = templateSendComponents(template, sheetLead);
+    if (attemptedSends > 0 && sendGapMs > 0) {
+      await wait(sendGapMs);
+    }
+    attemptedSends += 1;
     const sendResult = await sendWhatsAppTemplateMessage({
       config: whatsappConfig,
       to: contact.phone,
@@ -794,6 +809,9 @@ export async function runGoogleSheetLeadFlow({
       templateName: template.name,
       templateLanguage: template.language,
       sheetRowNumber: sheetLead.rowNumber,
+      sheetStatusColumnIndex: sheetLead.statusColumnIndex,
+      sheetRange,
+      leadSendGapMs: sendGapMs,
       variables: variables.named
     };
     const outbound = await createOutboundConversationMessage({
@@ -833,7 +851,7 @@ export async function runGoogleSheetLeadFlow({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: sheetFailureStatus(sendResult.error)
+        status: "failure"
       });
     }
 
