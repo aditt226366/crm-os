@@ -107,6 +107,22 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         input: "select",
         required: true,
         options: ["en_US", "en", "ar", "hi", "es", "fr"]
+      },
+      {
+        name: "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME",
+        label: "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME",
+        input: "text",
+        required: true,
+        placeholder: "scrap_follow_up_1",
+        helpText: "Approved Meta template for Scrap leads with no reply after 24 hours."
+      },
+      {
+        name: "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME",
+        label: "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME",
+        input: "text",
+        required: true,
+        placeholder: "scrap_follow_up_2",
+        helpText: "Approved Meta template for the final Scrap lead follow-up."
       }
     ]
   },

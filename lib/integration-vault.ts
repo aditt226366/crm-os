@@ -476,63 +476,144 @@ async function verifyWhatsappCloud(config: IntegrationConfig, options: VerifyOpt
   });
 }
 
-async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: Partial<Record<IntegrationType, IntegrationConfig>>) {
-  if (missingOrEmpty(config, "WHATSAPP_TEMPLATE_NAME")) {
-    return failure("WHATSAPP_TEMPLATE_NAME wrong");
-  }
-  if (missingOrEmpty(config, "WHATSAPP_TEMPLATE_LANGUAGE")) {
-    return failure("WHATSAPP_TEMPLATE_LANGUAGE wrong");
-  }
+type MetaTemplateSummary = {
+  name?: string;
+  language?: string;
+  status?: string;
+  category?: string;
+  components?: unknown[];
+};
 
-  const whatsappConfig = dependencies?.WHATSAPP_CLOUD;
-  if (!whatsappConfig?.WHATSAPP_ACCESS_TOKEN || !whatsappConfig.WHATSAPP_BUSINESS_ACCOUNT_ID) {
-    return failure("WhatsApp Cloud API is not connected.");
-  }
-
+async function fetchMetaTemplatesByName({
+  whatsappConfig,
+  templateName,
+  field
+}: {
+  whatsappConfig: IntegrationConfig;
+  templateName: string;
+  field: string;
+}): Promise<MetaTemplateSummary[] | VerificationResult> {
   const response = await fetchJson(
     `https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(
       whatsappConfig.WHATSAPP_BUSINESS_ACCOUNT_ID
-    )}/message_templates?name=${encodeURIComponent(config.WHATSAPP_TEMPLATE_NAME)}&access_token=${encodeURIComponent(
+    )}/message_templates?name=${encodeURIComponent(templateName)}&access_token=${encodeURIComponent(
       whatsappConfig.WHATSAPP_ACCESS_TOKEN
     )}`
   );
 
   if (response.timedOut) {
-    return failure("WhatsApp verification timed out");
+    return failure("WhatsApp verification timed out", field);
   }
   if (!response.ok) {
     return graphErrorCode(response.data) === 190
       ? failure("WhatsApp Cloud API is not connected.")
-      : failure("WHATSAPP_TEMPLATE_NAME wrong");
+      : failure(`${field} wrong`, field);
   }
 
-  const templates = ((response.data as {
-    data?: Array<{
-      name?: string;
-      language?: string;
-      status?: string;
-      category?: string;
-      components?: unknown[];
-    }>;
-  })?.data ?? []);
-  const nameMatch = templates.filter((template) => template.name === config.WHATSAPP_TEMPLATE_NAME);
-  if (!nameMatch.length) {
-    return failure("WHATSAPP_TEMPLATE_NAME wrong");
+  return ((response.data as { data?: MetaTemplateSummary[] })?.data ?? []);
+}
+
+async function verifyApprovedMetaTemplate({
+  config,
+  whatsappConfig,
+  templateNameField,
+  languageField = "WHATSAPP_TEMPLATE_LANGUAGE"
+}: {
+  config: IntegrationConfig;
+  whatsappConfig: IntegrationConfig;
+  templateNameField: string;
+  languageField?: string;
+}): Promise<MetaTemplateSummary | VerificationResult> {
+  if (missingOrEmpty(config, templateNameField)) {
+    return failure(`${templateNameField} wrong`, templateNameField);
   }
-  const languageMatch = nameMatch.find((template) => template.language === config.WHATSAPP_TEMPLATE_LANGUAGE);
+  if (missingOrEmpty(config, languageField)) {
+    return failure(`${languageField} wrong`, languageField);
+  }
+
+  const templates = await fetchMetaTemplatesByName({
+    whatsappConfig,
+    templateName: config[templateNameField],
+    field: templateNameField
+  });
+  if (!Array.isArray(templates)) {
+    return templates;
+  }
+
+  const nameMatch = templates.filter((template) => template.name === config[templateNameField]);
+  if (!nameMatch.length) {
+    return failure(`${templateNameField} wrong`, templateNameField);
+  }
+  const languageMatch = nameMatch.find((template) => template.language === config[languageField]);
   if (!languageMatch) {
-    return failure("WHATSAPP_TEMPLATE_LANGUAGE wrong");
+    return failure(`${languageField} wrong`, languageField);
   }
   if (languageMatch.status !== "APPROVED") {
-    return failure("WhatsApp template is not approved");
+    return failure(`${templateNameField} is not approved`, templateNameField);
+  }
+  return languageMatch;
+}
+
+function isVerificationResult(value: MetaTemplateSummary | VerificationResult): value is VerificationResult {
+  return "message" in value && "status" in value;
+}
+
+function templateMetadata(template: MetaTemplateSummary) {
+  return {
+    name: template.name,
+    language: template.language,
+    status: template.status,
+    category: template.category ?? null,
+    componentCount: Array.isArray(template.components) ? template.components.length : 0
+  };
+}
+
+async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: Partial<Record<IntegrationType, IntegrationConfig>>) {
+  const whatsappConfig = dependencies?.WHATSAPP_CLOUD;
+  if (!whatsappConfig?.WHATSAPP_ACCESS_TOKEN || !whatsappConfig.WHATSAPP_BUSINESS_ACCOUNT_ID) {
+    return failure("WhatsApp Cloud API is not connected.");
+  }
+
+  const welcomeTemplate = await verifyApprovedMetaTemplate({
+    config,
+    whatsappConfig,
+    templateNameField: "WHATSAPP_TEMPLATE_NAME"
+  });
+  if (isVerificationResult(welcomeTemplate)) {
+    return welcomeTemplate;
+  }
+
+  const scrapFollowUp1Template = await verifyApprovedMetaTemplate({
+    config,
+    whatsappConfig,
+    templateNameField: "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME"
+  });
+  if (isVerificationResult(scrapFollowUp1Template)) {
+    return scrapFollowUp1Template;
+  }
+
+  const scrapFollowUp2Template = await verifyApprovedMetaTemplate({
+    config,
+    whatsappConfig,
+    templateNameField: "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME"
+  });
+  if (isVerificationResult(scrapFollowUp2Template)) {
+    return scrapFollowUp2Template;
   }
 
   return success("Broadcast & Campaign Templates connected successfully", {
-    templateName: languageMatch.name,
-    templateLanguage: languageMatch.language,
-    templateStatus: languageMatch.status,
-    category: languageMatch.category ?? null,
-    componentCount: Array.isArray(languageMatch.components) ? languageMatch.components.length : 0
+    templateName: welcomeTemplate.name,
+    templateLanguage: welcomeTemplate.language,
+    templateStatus: welcomeTemplate.status,
+    category: welcomeTemplate.category ?? null,
+    componentCount: Array.isArray(welcomeTemplate.components) ? welcomeTemplate.components.length : 0,
+    scrapFollowUp1TemplateName: scrapFollowUp1Template.name,
+    scrapFollowUp2TemplateName: scrapFollowUp2Template.name,
+    templates: {
+      welcome: templateMetadata(welcomeTemplate),
+      scrapFollowUp1: templateMetadata(scrapFollowUp1Template),
+      scrapFollowUp2: templateMetadata(scrapFollowUp2Template)
+    }
   });
 }
 

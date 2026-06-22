@@ -14,7 +14,7 @@ import {
   withContactMetaDeliveryLimit,
   withMetaDeliveryLimitMetadata
 } from "@/lib/meta-delivery-limit";
-import { renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
+import { fetchWhatsAppTemplateDetails, renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
 import {
   asRecord,
   readScrapFollowUpState,
@@ -92,10 +92,6 @@ function wait(ms: number) {
   });
 }
 
-function normalizeText(value: string) {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
 function metadataStep(metadata: unknown): FollowUpStep | null {
   const value = asRecord(metadata).scrapFollowUpStep;
   const step = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
@@ -163,34 +159,77 @@ function templateVariables(templateBody: string, conversation: ConversationForFo
   };
 }
 
-async function resolveFollowUpTemplate(tenantId: string, step: FollowUpStep) {
-  const definition = FOLLOW_UPS[step];
-  const configuredName = process.env[definition.templateEnvName]?.trim();
-  const configuredLanguage = process.env[definition.templateEnvLanguage]?.trim();
+async function syncFollowUpTemplateFromMeta({
+  tenantId,
+  templateName,
+  language
+}: {
+  tenantId: string;
+  templateName: string;
+  language: string;
+}) {
+  const details = await fetchWhatsAppTemplateDetails({
+    config: await whatsappConfig(tenantId),
+    templateName,
+    language
+  }).catch((error) => {
+    console.error("[scrap-follow-up.template] Meta sync failed", error instanceof Error ? error.message : String(error));
+    return null;
+  });
 
-  if (configuredName) {
-    return prisma.whatsAppTemplate.findFirst({
-      where: {
-        tenantId,
-        name: configuredName,
-        status: "APPROVED",
-        ...(configuredLanguage ? { language: configuredLanguage } : {})
-      },
-      orderBy: { updatedAt: "desc" }
-    });
+  if (!details || details.status !== "APPROVED") {
+    return null;
   }
 
-  const templates = await prisma.whatsAppTemplate.findMany({
-    where: { tenantId, status: "APPROVED" },
-    orderBy: { updatedAt: "desc" },
-    take: 100
+  return prisma.whatsAppTemplate.upsert({
+    where: {
+      tenantId_name_language: {
+        tenantId,
+        name: details.name,
+        language: details.language
+      }
+    },
+    create: {
+      tenantId,
+      metaTemplateId: details.metaTemplateId,
+      name: details.name,
+      language: details.language,
+      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
+      status: "APPROVED",
+      body: details.body,
+      components: details.components as Prisma.InputJsonValue
+    },
+    update: {
+      metaTemplateId: details.metaTemplateId,
+      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
+      status: "APPROVED",
+      body: details.body,
+      components: details.components as Prisma.InputJsonValue
+    }
   });
-  const expectedBody = normalizeText(definition.body);
-  return (
-    templates.find((template) => normalizeText(template.body) === expectedBody) ??
-    templates.find((template) => (definition.candidates as readonly string[]).includes(template.name.toLowerCase())) ??
-    null
-  );
+}
+
+async function resolveFollowUpTemplate(
+  tenantId: string,
+  step: FollowUpStep,
+  templateSettingsConfig: IntegrationConfig
+) {
+  const definition = FOLLOW_UPS[step];
+  const configuredName = templateSettingsConfig[definition.templateEnvName]?.trim() || process.env[definition.templateEnvName]?.trim();
+  const configuredLanguage =
+    templateSettingsConfig.WHATSAPP_TEMPLATE_LANGUAGE?.trim() || process.env[definition.templateEnvLanguage]?.trim();
+  if (!configuredName || !configuredLanguage) return null;
+
+  const template = await prisma.whatsAppTemplate.findFirst({
+    where: {
+      tenantId,
+      name: configuredName,
+      language: configuredLanguage,
+      status: "APPROVED"
+    },
+    orderBy: { updatedAt: "desc" }
+  });
+  return template ?? syncFollowUpTemplateFromMeta({ tenantId, templateName: configuredName, language: configuredLanguage });
 }
 
 async function updateContactScrapState({
@@ -377,6 +416,14 @@ async function whatsappConfig(tenantId: string): Promise<IntegrationConfig> {
   return readEncryptedConfig(integration.encryptedConfig);
 }
 
+async function verifiedTemplateSettingsConfig(tenantId: string) {
+  const integration = await prisma.integration.findUnique({
+    where: { tenantId_type: { tenantId, type: "WHATSAPP_TEMPLATE_SETTINGS" } },
+    select: { status: true, encryptedConfig: true }
+  });
+  return integration?.status === "CONNECTED" ? readEncryptedConfig(integration.encryptedConfig) : null;
+}
+
 async function dueStep(conversation: ConversationForFollowUp, now: Date): Promise<{ step: FollowUpStep } | { skip: string; dormant?: boolean }> {
   const state = readScrapFollowUpState(conversation.contact.customFields);
   if (state.dormantAt || conversation.contact.tags.includes(SCRAP_DORMANT_TAG)) return { skip: "Scrap Dormant", dormant: true };
@@ -445,6 +492,18 @@ export async function runDueScrapFollowUps({
   await ensureLeadWorkspaceSchema();
   const now = new Date();
   const sendGapMs = configuredSendGapMs();
+  const templateSettingsConfig = await verifiedTemplateSettingsConfig(tenantId);
+  if (!templateSettingsConfig) {
+    return {
+      scanned: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      dormant: 0,
+      templateMissing: 0,
+      results: []
+    };
+  }
   const conversations = await prisma.conversation.findMany({
     where: {
       tenantId,
@@ -486,7 +545,7 @@ export async function runDueScrapFollowUps({
     }
 
     if (!templateCache.has(due.step)) {
-      templateCache.set(due.step, await resolveFollowUpTemplate(tenantId, due.step));
+      templateCache.set(due.step, await resolveFollowUpTemplate(tenantId, due.step, templateSettingsConfig));
     }
     const template = templateCache.get(due.step);
     if (!template) {
