@@ -79,6 +79,8 @@ export function serializeConversation(conversation: {
   };
   queueItems?: Array<{ id: string; status: string; priority: number; reason: string }>;
   orders?: Array<{ id: string; status: string; orderNumber: string }>;
+  hasFailedMessages?: boolean;
+  hasMetaDeliveryLimitedMessages?: boolean;
 }) {
   return {
     id: conversation.id,
@@ -115,7 +117,9 @@ export function serializeConversation(conversation: {
       lastContactedAt: conversation.contact.lastContactedAt?.toISOString() ?? null
     },
     humanQueue: conversation.queueItems?.find((item) => item.status !== "RESOLVED") ?? null,
-    order: conversation.orders?.[0] ?? null
+    order: conversation.orders?.[0] ?? null,
+    hasFailedMessages: Boolean(conversation.hasFailedMessages),
+    hasMetaDeliveryLimitedMessages: Boolean(conversation.hasMetaDeliveryLimitedMessages)
   };
 }
 

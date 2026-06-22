@@ -5,9 +5,18 @@ import { requireFeature } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { serializeConversation } from "@/lib/inbox";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
+import { isMetaDeliveryLimitError } from "@/lib/meta-delivery-limit";
 
 const confirmedOrderStatuses = ["CONFIRMED", "DISPATCHED", "COMPLETED"] as const;
 const messageCountedTypes = ["NOTE", "SYSTEM"] as const;
+const blockedMessageWhere = {
+  OR: [
+    { status: "FAILED" },
+    { metadata: { path: ["metaDeliveryLimit", "status"], equals: "META_DELIVERY_LIMITED" } },
+    { failureReason: { contains: "healthy ecosystem engagement", mode: "insensitive" } },
+    { failureReason: { contains: "131049" } }
+  ]
+} satisfies Prisma.MessageWhereInput;
 
 function parseTake(value: string | null) {
   if (!value) return undefined;
@@ -59,6 +68,9 @@ export async function GET(request: NextRequest) {
     if (filter === "broadcast" || filter === "campaign" || filter === "ads") {
       and.push({ source: filter === "ads" ? "AD" : filter.toUpperCase() as "BROADCAST" | "CAMPAIGN" });
     }
+    if (filter !== "all") {
+      and.push({ messages: { none: blockedMessageWhere } });
+    }
 
     if (and.length) {
       where.AND = and;
@@ -73,6 +85,16 @@ export async function GET(request: NextRequest) {
           ...(filter === "orders" ? { where: { status: { in: [...confirmedOrderStatuses] } } } : {}),
           orderBy: { createdAt: "desc" },
           take: 1
+        },
+        messages: {
+          where: blockedMessageWhere,
+          select: {
+            id: true,
+            status: true,
+            failureReason: true,
+            metadata: true
+          },
+          take: 5
         },
         _count: {
           select: {
@@ -96,7 +118,11 @@ export async function GET(request: NextRequest) {
       conversations: limitedConversations.map((conversation) =>
         serializeConversation({
           ...conversation,
-          totalMessageCount: conversation._count.messages
+          totalMessageCount: conversation._count.messages,
+          hasFailedMessages: conversation.messages.length > 0,
+          hasMetaDeliveryLimitedMessages: conversation.messages.some((message) =>
+            isMetaDeliveryLimitError([message.failureReason, message.metadata])
+          )
         })
       )
     });

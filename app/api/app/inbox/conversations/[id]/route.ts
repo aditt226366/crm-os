@@ -3,6 +3,7 @@ import { requireFeature } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { getTenantConversation, serializeConversation, serializeMessage } from "@/lib/inbox";
 import { prisma } from "@/lib/prisma";
+import { isMetaDeliveryLimitError } from "@/lib/meta-delivery-limit";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest, context: Context) {
             }
           })
         : existingConversation;
-    const [messages, messageCount] = await Promise.all([
+    const [messages, messageCount, blockedMessages] = await Promise.all([
       prisma.message.findMany({
         where: { tenantId: user.tenantId!, conversationId: id },
         orderBy: { createdAt: "desc" },
@@ -35,13 +36,36 @@ export async function GET(request: NextRequest, context: Context) {
           conversationId: id,
           type: { notIn: ["NOTE", "SYSTEM"] }
         }
+      }),
+      prisma.message.findMany({
+        where: {
+          tenantId: user.tenantId!,
+          conversationId: id,
+          OR: [
+            { status: "FAILED" },
+            { metadata: { path: ["metaDeliveryLimit", "status"], equals: "META_DELIVERY_LIMITED" } },
+            { failureReason: { contains: "healthy ecosystem engagement", mode: "insensitive" } },
+            { failureReason: { contains: "131049" } }
+          ]
+        },
+        select: {
+          id: true,
+          status: true,
+          failureReason: true,
+          metadata: true
+        },
+        take: 5
       })
     ]);
 
     return json({
       conversation: serializeConversation({
         ...conversation,
-        totalMessageCount: messageCount
+        totalMessageCount: messageCount,
+        hasFailedMessages: blockedMessages.length > 0,
+        hasMetaDeliveryLimitedMessages: blockedMessages.some((message) =>
+          isMetaDeliveryLimitError([message.failureReason, message.metadata])
+        )
       }),
       messages: messages.reverse().map(serializeMessage)
     });

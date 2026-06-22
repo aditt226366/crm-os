@@ -55,6 +55,8 @@ type Conversation = {
   };
   humanQueue: { id: string; status: string; priority: number; reason: string } | null;
   order: { id: string; status: string; orderNumber: string } | null;
+  hasFailedMessages: boolean;
+  hasMetaDeliveryLimitedMessages: boolean;
 };
 
 type Message = {
@@ -136,6 +138,7 @@ function conversationMessageCount(conversation: Conversation) {
 function matchesActiveFilter(conversation: Conversation, filter: string) {
   const messageCount = conversationMessageCount(conversation);
   if (filter === "all") return true;
+  if (conversation.hasFailedMessages || conversation.hasMetaDeliveryLimitedMessages) return false;
   if (filter === "unread") return conversation.unreadCount > 0;
   if (filter === "hot") return messageCount >= 6;
   if (filter === "warm") return messageCount >= 2 && messageCount <= 5;
@@ -158,6 +161,21 @@ function messageDisplayStatus(message: Message) {
   return deliveryLimit?.status === "META_DELIVERY_LIMITED" || isMetaDeliveryLimitError(message.failureReason)
     ? "META_DELIVERY_LIMITED"
     : message.status;
+}
+
+function isFailedOrMetaLimitedMessage(message: Message) {
+  const status = messageDisplayStatus(message);
+  return status === "FAILED" || status === "META_DELIVERY_LIMITED";
+}
+
+function withMessageFailureFlags(conversation: Conversation, message: Message) {
+  if (!isFailedOrMetaLimitedMessage(message)) return conversation;
+  return {
+    ...conversation,
+    hasFailedMessages: true,
+    hasMetaDeliveryLimitedMessages:
+      conversation.hasMetaDeliveryLimitedMessages || messageDisplayStatus(message) === "META_DELIVERY_LIMITED"
+  };
 }
 
 function messageStatusIcon(message: Message) {
@@ -431,13 +449,13 @@ export function InboxPage() {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const selected = useMemo(
-    () => conversations.find((conversation) => conversation.id === selectedId) ?? null,
-    [conversations, selectedId]
-  );
   const visibleConversations = useMemo(
     () => conversations.filter((conversation) => matchesActiveFilter(conversation, filter)),
     [conversations, filter]
+  );
+  const selected = useMemo(
+    () => visibleConversations.find((conversation) => conversation.id === selectedId) ?? null,
+    [selectedId, visibleConversations]
   );
 
   const serviceWindowClosed = useMemo(() => {
@@ -495,7 +513,7 @@ export function InboxPage() {
   }, []);
 
   useEffect(() => {
-    const selectedConversationId = selectedId;
+    const selectedConversationId = selected?.id;
     if (selectedConversationId) {
       const timeout = setTimeout(() => loadConversation(selectedConversationId), 0);
       return () => clearTimeout(timeout);
@@ -503,13 +521,13 @@ export function InboxPage() {
       const timeout = setTimeout(() => setMessages([]), 0);
       return () => clearTimeout(timeout);
     }
-  }, [loadConversation, selectedId]);
+  }, [loadConversation, selected?.id]);
 
   useEffect(() => {
     const events = new EventSource("/api/app/inbox/events");
     events.addEventListener("message.created", (event) => {
       const data = JSON.parse((event as MessageEvent).data) as { payload: { conversation: Conversation; message: Message } };
-      setConversations((current) => upsertConversation(current, data.payload.conversation));
+      setConversations((current) => upsertConversation(current, withMessageFailureFlags(data.payload.conversation, data.payload.message)));
       setMessages((current) =>
         data.payload.message.conversationId === selectedId ? upsertMessage(current, data.payload.message) : current
       );
@@ -525,6 +543,13 @@ export function InboxPage() {
     events.addEventListener("message.status.updated", (event) => {
       const data = JSON.parse((event as MessageEvent).data) as { payload: Message };
       setMessages((current) => current.map((message) => (message.id === data.payload.id ? data.payload : message)));
+      if (isFailedOrMetaLimitedMessage(data.payload)) {
+        setConversations((current) =>
+          current.map((conversation) =>
+            conversation.id === data.payload.conversationId ? withMessageFailureFlags(conversation, data.payload) : conversation
+          )
+        );
+      }
     });
     return () => events.close();
   }, [loadConversation, selectedId]);
@@ -647,7 +672,7 @@ export function InboxPage() {
                     <ConversationRow
                       key={conversation.id}
                       conversation={conversation}
-                      active={conversation.id === selectedId}
+                      active={conversation.id === selected?.id}
                       onSelect={() => setSelectedId(conversation.id)}
                     />
                   ))}
