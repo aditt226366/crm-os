@@ -131,18 +131,18 @@ function upsertMessage(rows: Message[], incoming: Message) {
   return [...rows, incoming].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 }
 
-function conversationMessageCount(conversation: Conversation) {
-  return conversation.totalMessageCount || conversation.contact.totalMessageCount || 0;
+function conversationCustomerReplyCount(conversation: Conversation) {
+  return conversation.customerReplyCount || conversation.contact.customerReplyCount || 0;
 }
 
 function matchesActiveFilter(conversation: Conversation, filter: string) {
-  const messageCount = conversationMessageCount(conversation);
+  const customerReplyCount = conversationCustomerReplyCount(conversation);
   if (filter === "all") return true;
   if (conversation.hasFailedMessages || conversation.hasMetaDeliveryLimitedMessages) return false;
   if (filter === "unread") return conversation.unreadCount > 0;
-  if (filter === "hot") return messageCount >= 6;
-  if (filter === "warm") return messageCount >= 2 && messageCount <= 5;
-  if (filter === "scrap") return messageCount <= 2;
+  if (filter === "hot") return customerReplyCount >= 6;
+  if (filter === "warm") return customerReplyCount >= 2 && customerReplyCount <= 5;
+  if (filter === "scrap") return customerReplyCount <= 1;
   if (filter === "human-queue") return conversation.humanTakeover || Boolean(conversation.humanQueue);
   if (filter === "orders") return Boolean(conversation.order && confirmedOrderStatuses.has(conversation.order.status));
   if (filter === "broadcast") return conversation.source === "BROADCAST";
@@ -226,6 +226,7 @@ function ConversationRow({
           </span>
         ) : null}
         {conversation.humanTakeover ? <StatusBadge value="HUMAN" /> : null}
+        {conversation.contact.tags.includes("SCRAP_DORMANT") ? <StatusBadge value="SCRAP_DORMANT" /> : null}
       </div>
     </button>
   );
@@ -386,6 +387,7 @@ function ContactPanel({
           <StatusBadge value={selected.contact.leadTemperature} />
           <StatusBadge value={selected.source} />
           {selected.contact.leadTemperatureOverride ? <StatusBadge value="MANUAL OVERRIDE" /> : null}
+          {selected.contact.tags.includes("SCRAP_DORMANT") ? <StatusBadge value="SCRAP_DORMANT" /> : null}
         </div>
       </div>
       <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto p-5">

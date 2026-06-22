@@ -106,10 +106,10 @@ export async function GET(request: NextRequest) {
     });
 
     const filteredConversations = conversations.filter((conversation) => {
-      const messageCount = conversation._count.messages;
-      if (filter === "hot") return messageCount >= 6;
-      if (filter === "warm") return messageCount >= 2 && messageCount <= 5;
-      if (filter === "scrap") return messageCount <= 2;
+      const customerReplyCount = conversation.customerReplyCount;
+      if (filter === "hot") return customerReplyCount >= 6;
+      if (filter === "warm") return customerReplyCount >= 2 && customerReplyCount <= 5;
+      if (filter === "scrap") return customerReplyCount <= 1;
       return true;
     });
     const limitedConversations = take === undefined ? filteredConversations : filteredConversations.slice(0, take);

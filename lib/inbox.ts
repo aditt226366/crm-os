@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { recalculateConversationLeadTemperature } from "@/lib/lead-temperature";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
+import { SCRAP_DORMANT_TAG, withoutScrapDormantTag } from "@/lib/scrap-follow-up-state";
 
 export function normalizePhone(phone: string) {
   const trimmed = phone.trim();
@@ -184,7 +185,8 @@ export async function upsertInboundConversationMessage({
   const now = new Date();
   const serviceWindow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-  const contact = await prisma.contact.upsert({
+  const isOptOutRequest = ["STOP", "UNSUBSCRIBE", "CANCEL"].includes(body.trim().toUpperCase());
+  let contact = await prisma.contact.upsert({
     where: {
       tenantId_phone: {
         tenantId,
@@ -201,9 +203,16 @@ export async function upsertInboundConversationMessage({
     update: {
       name: name?.trim() || undefined,
       lastMessageAt: now,
-      optOut: ["STOP", "UNSUBSCRIBE", "CANCEL"].includes(body.trim().toUpperCase()) ? true : undefined
+      optOut: isOptOutRequest ? true : undefined
     }
   });
+
+  if (!isOptOutRequest && contact.tags.includes(SCRAP_DORMANT_TAG)) {
+    contact = await prisma.contact.update({
+      where: { id: contact.id },
+      data: { tags: withoutScrapDormantTag(contact.tags) }
+    });
+  }
 
   const conversation =
     (await prisma.conversation.findFirst({

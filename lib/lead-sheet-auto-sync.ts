@@ -3,6 +3,7 @@ import { ApiError } from "@/lib/api";
 import type { IntegrationType } from "@/lib/constants";
 import { runGoogleSheetLeadFlow } from "@/lib/lead-flow";
 import { prisma } from "@/lib/prisma";
+import { runDueScrapFollowUps, type ScrapFollowUpRunResult } from "@/lib/scrap-follow-up";
 
 const REQUIRED_FLOW_INTEGRATIONS: IntegrationType[] = [
   "GOOGLE_SHEETS",
@@ -15,6 +16,10 @@ const LEAD_SYNC_LEASE_MS = 120_000;
 
 type LeadFlowInput = Parameters<typeof runGoogleSheetLeadFlow>[0];
 type LeadFlowResult = Awaited<ReturnType<typeof runGoogleSheetLeadFlow>>;
+type ScrapFollowUpResult = Pick<
+  ScrapFollowUpRunResult,
+  "scanned" | "sent" | "failed" | "skipped" | "dormant" | "templateMissing"
+>;
 
 type TenantCandidate = {
   id: string;
@@ -44,6 +49,7 @@ export type LeadSheetAutoSyncTenantRun = {
   failed?: number;
   skipped?: number;
   deliveryLimited?: number;
+  scrapFollowUps?: ScrapFollowUpResult;
   reason?: string;
   missingIntegrations?: IntegrationType[];
 };
@@ -59,6 +65,12 @@ export type LeadSheetAutoSyncSummary = {
     failed: number;
     skipped: number;
     deliveryLimited: number;
+    scrapFollowUpsScanned: number;
+    scrapFollowUpsSent: number;
+    scrapFollowUpsFailed: number;
+    scrapFollowUpsSkipped: number;
+    scrapDormant: number;
+    scrapFollowUpTemplateMissing: number;
   };
   runs: LeadSheetAutoSyncTenantRun[];
 };
@@ -251,7 +263,13 @@ export async function runDueGoogleSheetLeadFlows({
         sent: 0,
         failed: 0,
         skipped: 0,
-        deliveryLimited: 0
+        deliveryLimited: 0,
+        scrapFollowUpsScanned: 0,
+        scrapFollowUpsSent: 0,
+        scrapFollowUpsFailed: 0,
+        scrapFollowUpsSkipped: 0,
+        scrapDormant: 0,
+        scrapFollowUpTemplateMissing: 0
       },
       runs: [
         {
@@ -318,17 +336,30 @@ export async function runDueGoogleSheetLeadFlows({
           continue;
         }
 
+        const scrapFollowUps = await runDueScrapFollowUps({
+          tenantId: candidate.id,
+          userId: actor.id
+        });
+        const anySent = result.sent > 0 || scrapFollowUps.sent > 0 || scrapFollowUps.dormant > 0;
         runs.push({
           tenantId: candidate.id,
           tenantName: candidate.name,
           actorUserId: actor.id,
-          status: result.sent > 0 ? "sent" : "skipped",
+          status: anySent ? "sent" : "skipped",
           scanned: result.scanned,
           sent: result.sent,
           failed: result.failed,
           skipped: result.skipped,
           deliveryLimited: result.deliveryLimited,
-          reason: result.sent > 0 ? undefined : "No new Sheet rows needed messaging."
+          scrapFollowUps: {
+            scanned: scrapFollowUps.scanned,
+            sent: scrapFollowUps.sent,
+            failed: scrapFollowUps.failed,
+            skipped: scrapFollowUps.skipped,
+            dormant: scrapFollowUps.dormant,
+            templateMissing: scrapFollowUps.templateMissing
+          },
+          reason: anySent ? undefined : "No new Sheet rows or Scrap follow-ups needed messaging."
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Lead sheet sync failed.";
@@ -358,7 +389,13 @@ export async function runDueGoogleSheetLeadFlows({
         sent: runs.reduce((sum, run) => sum + (run.sent ?? 0), 0),
         failed: runs.reduce((sum, run) => sum + (run.failed ?? (run.status === "failed" ? 1 : 0)), 0),
         skipped: runs.reduce((sum, run) => sum + (run.skipped ?? (run.status === "skipped" ? 1 : 0)), 0),
-        deliveryLimited: runs.reduce((sum, run) => sum + (run.deliveryLimited ?? 0), 0)
+        deliveryLimited: runs.reduce((sum, run) => sum + (run.deliveryLimited ?? 0), 0),
+        scrapFollowUpsScanned: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.scanned ?? 0), 0),
+        scrapFollowUpsSent: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.sent ?? 0), 0),
+        scrapFollowUpsFailed: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.failed ?? 0), 0),
+        scrapFollowUpsSkipped: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.skipped ?? 0), 0),
+        scrapDormant: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.dormant ?? 0), 0),
+        scrapFollowUpTemplateMissing: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.templateMissing ?? 0), 0)
       },
       runs
     };
