@@ -3,10 +3,12 @@ import { INTEGRATION_DEFINITIONS, type IntegrationType } from "@/lib/constants";
 export type IntegrationFieldDefinition = {
   name: string;
   label: string;
-  input: "text" | "url" | "password" | "password-textarea" | "select" | "file";
+  input: "text" | "url" | "password" | "password-textarea" | "textarea" | "select" | "file";
   required?: boolean;
   secret?: boolean;
   sensitive?: boolean;
+  group?: string;
+  defaultValue?: string;
   helpText?: string;
   placeholder?: string;
   options?: string[];
@@ -95,34 +97,116 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
     testConnection: true,
     fields: [
       {
-        name: "WHATSAPP_TEMPLATE_NAME",
-        label: "WHATSAPP_TEMPLATE_NAME",
+        name: "MAIN_TEMPLATE_NAME",
+        label: "Template name",
         input: "text",
         required: true,
+        group: "Main Welcome Template",
         placeholder: "welcome_message"
       },
       {
-        name: "WHATSAPP_TEMPLATE_LANGUAGE",
-        label: "WHATSAPP_TEMPLATE_LANGUAGE",
+        name: "MAIN_TEMPLATE_LANGUAGE",
+        label: "Language",
         input: "select",
         required: true,
+        group: "Main Welcome Template",
         options: ["en_US", "en", "ar", "hi", "es", "fr"]
       },
       {
-        name: "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME",
-        label: "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME",
+        name: "MAIN_TEMPLATE_VARIABLE_MODE",
+        label: "Variable mode",
+        input: "select",
+        required: true,
+        group: "Main Welcome Template",
+        options: ["NUMBERED", "NAMED"],
+        defaultValue: "NUMBERED",
+        helpText: "Printwear welcome template uses NUMBERED variables like {{1}}."
+      },
+      {
+        name: "MAIN_TEMPLATE_VARIABLES",
+        label: "Variable mapping",
+        input: "textarea",
+        required: true,
+        group: "Main Welcome Template",
+        defaultValue: "{\"1\":\"lead.name\"}",
+        placeholder: "{\"1\":\"lead.name\"}",
+        helpText: "JSON mapping. For Printwear: 1 -> lead.name."
+      },
+      {
+        name: "SCRAP_FOLLOWUP_1_TEMPLATE_NAME",
+        label: "Template name",
         input: "text",
         required: true,
+        group: "Scrap Follow-up Day 1",
+        defaultValue: "scrap_follow_up_1",
         placeholder: "scrap_follow_up_1",
         helpText: "Approved Meta template for Scrap leads with no reply after 24 hours."
       },
       {
-        name: "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME",
-        label: "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME",
+        name: "SCRAP_FOLLOWUP_1_TEMPLATE_LANGUAGE",
+        label: "Language",
+        input: "select",
+        required: true,
+        group: "Scrap Follow-up Day 1",
+        options: ["en_US", "en", "ar", "hi", "es", "fr"]
+      },
+      {
+        name: "SCRAP_FOLLOWUP_1_VARIABLE_MODE",
+        label: "Variable mode",
+        input: "select",
+        required: true,
+        group: "Scrap Follow-up Day 1",
+        options: ["NUMBERED", "NAMED"],
+        defaultValue: "NAMED",
+        helpText: "Printwear Scrap follow-up 1 uses NAMED variables like {{customer_name}}."
+      },
+      {
+        name: "SCRAP_FOLLOWUP_1_VARIABLES",
+        label: "Variable mapping",
+        input: "textarea",
+        required: true,
+        group: "Scrap Follow-up Day 1",
+        defaultValue: "{\"customer_name\":\"lead.name\"}",
+        placeholder: "{\"customer_name\":\"lead.name\"}",
+        helpText: "JSON mapping. For Printwear: customer_name -> lead.name."
+      },
+      {
+        name: "SCRAP_FOLLOWUP_2_TEMPLATE_NAME",
+        label: "Template name",
         input: "text",
         required: true,
+        group: "Scrap Follow-up Day 2",
+        defaultValue: "scrap_follow_up_2",
         placeholder: "scrap_follow_up_2",
         helpText: "Approved Meta template for the final Scrap lead follow-up."
+      },
+      {
+        name: "SCRAP_FOLLOWUP_2_TEMPLATE_LANGUAGE",
+        label: "Language",
+        input: "select",
+        required: true,
+        group: "Scrap Follow-up Day 2",
+        options: ["en_US", "en", "ar", "hi", "es", "fr"]
+      },
+      {
+        name: "SCRAP_FOLLOWUP_2_VARIABLE_MODE",
+        label: "Variable mode",
+        input: "select",
+        required: true,
+        group: "Scrap Follow-up Day 2",
+        options: ["NUMBERED", "NAMED"],
+        defaultValue: "NAMED",
+        helpText: "Printwear Scrap follow-up 2 uses NAMED variables like {{customer_name}}."
+      },
+      {
+        name: "SCRAP_FOLLOWUP_2_VARIABLES",
+        label: "Variable mapping",
+        input: "textarea",
+        required: true,
+        group: "Scrap Follow-up Day 2",
+        defaultValue: "{\"customer_name\":\"lead.name\"}",
+        placeholder: "{\"customer_name\":\"lead.name\"}",
+        helpText: "JSON mapping. For Printwear: customer_name -> lead.name."
       }
     ]
   },

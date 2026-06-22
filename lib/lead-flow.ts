@@ -18,9 +18,11 @@ import { emitTenantEvent } from "@/lib/realtime";
 import {
   fetchWhatsAppTemplateDetails,
   renderTemplateBody,
+  resolveWhatsAppTemplateVariables,
   sendWhatsAppTemplateMessage,
-  type WhatsAppTemplateComponentPayload
+  type WhatsAppTemplateLead
 } from "@/lib/whatsapp-cloud";
+import { templateVariableConfig } from "@/lib/whatsapp-template-config";
 import {
   activeMetaDeliveryLimit,
   activeMetaDeliveryLimitFromMessage,
@@ -51,6 +53,15 @@ type LeadTemplate = {
   components?: unknown;
 };
 
+function leadTemplateInput(lead: SheetLead): WhatsAppTemplateLead {
+  return {
+    name: lead.name,
+    phone: lead.phone,
+    status: lead.status,
+    row: lead.row
+  };
+}
+
 function configuredLeadSendGapMs() {
   const value = Number(process.env.LEAD_SHEET_SEND_GAP_MS);
   if (!Number.isFinite(value) || value < 0) return DEFAULT_SEND_GAP_MS;
@@ -80,15 +91,15 @@ function assertConnected(
 }
 
 function configuredTemplate(config: IntegrationConfig): LeadTemplate | null {
-  const name = config.WHATSAPP_TEMPLATE_NAME?.trim();
-  if (!name) return null;
+  const templateConfig = templateVariableConfig(config, "MAIN");
+  if (!templateConfig) return null;
 
   return {
     id: null,
-    name,
-    language: config.WHATSAPP_TEMPLATE_LANGUAGE?.trim() || "en_US",
+    name: templateConfig.name,
+    language: templateConfig.language,
     status: "APPROVED",
-    body: `Approved WhatsApp template: ${name}`,
+    body: `Approved WhatsApp template: ${templateConfig.name}`,
     components: null
   };
 }
@@ -142,89 +153,6 @@ async function resolveTemplate({
   if (configured) return configured;
 
   throw new ApiError(404, "TEMPLATE_NOT_FOUND", "Approved template not found for this company.");
-}
-
-function templateVariables(templateBody: string, lead: SheetLead) {
-  const keys = Array.from(templateBody.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)).map((match) => match[1]);
-  const uniqueKeys = Array.from(new Set(keys));
-  const named: Record<string, string> = {};
-
-  uniqueKeys.forEach((key, index) => {
-    const normalized = key.toLowerCase();
-    if (normalized === "1" || normalized.includes("name") || normalized.includes("customer")) {
-      named[key] = lead.name || "there";
-    } else if (normalized === "2" || normalized.includes("phone") || normalized.includes("number")) {
-      named[key] = lead.phone;
-    } else {
-      named[key] = lead.row[index] || lead.name || lead.phone;
-    }
-  });
-
-  return {
-    named,
-    positional: uniqueKeys.map((key) => named[key] || lead.name || lead.phone)
-  };
-}
-
-function valueForTemplateKey(key: string, lead: SheetLead, fallbackIndex: number) {
-  const normalized = key.toLowerCase();
-  if (normalized === "1" || normalized.includes("name") || normalized.includes("customer")) {
-    return lead.name || "there";
-  }
-  if (normalized === "2" || normalized.includes("phone") || normalized.includes("number")) {
-    return lead.phone;
-  }
-  if (normalized.includes("status")) {
-    return lead.status || "new";
-  }
-  return lead.row[fallbackIndex] || lead.name || lead.phone;
-}
-
-function textParameters(text: string | undefined, lead: SheetLead) {
-  const keys = Array.from((text ?? "").matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)).map((match) => match[1]);
-  const uniqueKeys = Array.from(new Set(keys));
-  return uniqueKeys.map((key, index) => ({
-    type: "text" as const,
-    text: valueForTemplateKey(key, lead, index)
-  }));
-}
-
-function templateSendComponents(template: LeadTemplate, lead: SheetLead): WhatsAppTemplateComponentPayload[] | undefined {
-  if (!Array.isArray(template.components)) {
-    return undefined;
-  }
-
-  const components: WhatsAppTemplateComponentPayload[] = [];
-  for (const component of template.components) {
-    if (!component || typeof component !== "object") continue;
-    const typed = component as { type?: string; format?: string; text?: string; buttons?: Array<{ type?: string; url?: string; text?: string }> };
-    const type = typed.type?.toUpperCase();
-
-    if (type === "BODY") {
-      const parameters = textParameters(typed.text, lead);
-      if (parameters.length) {
-        components.push({ type: "body", parameters });
-      }
-    }
-
-    if (type === "HEADER" && typed.format?.toUpperCase() === "TEXT") {
-      const parameters = textParameters(typed.text, lead);
-      if (parameters.length) {
-        components.push({ type: "header", parameters });
-      }
-    }
-
-    if (type === "BUTTONS") {
-      for (const [index, button] of (typed.buttons ?? []).entries()) {
-        const parameters = textParameters(button.url ?? button.text, lead);
-        if (button.type?.toUpperCase() === "URL" && parameters.length) {
-          components.push({ type: "button", sub_type: "url", index: String(index), parameters });
-        }
-      }
-    }
-  }
-
-  return components.length ? components : undefined;
 }
 
 async function safeRecordUsage(input: {
@@ -694,6 +622,10 @@ export async function runGoogleSheetLeadFlow({
     "WHATSAPP_TEMPLATE_SETTINGS",
     "WhatsApp template settings are not configured for this company."
   );
+  const mainTemplateConfig = templateVariableConfig(templateSettingsConfig, "MAIN");
+  if (!mainTemplateConfig) {
+    throw new ApiError(409, "TEMPLATE_CONFIG_MISSING", "Main WhatsApp template variable mapping is not configured.");
+  }
   assertConnected(integrations, "KNOWLEDGE_BASE", "Knowledge base is not connected for this company.");
   assertConnected(integrations, "AI_MODEL", "AI model is not connected for this company.");
   await syncConfiguredTemplateFromMeta({ tenantId, templateSettingsConfig, whatsappConfig });
@@ -784,8 +716,11 @@ export async function runGoogleSheetLeadFlow({
       continue;
     }
 
-    const variables = templateVariables(template.body, sheetLead);
-    const components = templateSendComponents(template, sheetLead);
+    const leadInput = leadTemplateInput(sheetLead);
+    const variables = resolveWhatsAppTemplateVariables({
+      variables: mainTemplateConfig.variables,
+      lead: leadInput
+    });
     if (attemptedSends > 0 && sendGapMs > 0) {
       await wait(sendGapMs);
     }
@@ -795,14 +730,15 @@ export async function runGoogleSheetLeadFlow({
       to: contact.phone,
       templateName: template.name,
       language: template.language,
-      variables: components ? undefined : variables.positional,
-      components
+      variableMode: mainTemplateConfig.variableMode,
+      variableMappings: mainTemplateConfig.variables,
+      lead: leadInput
     });
     const immediateDeliveryLimit =
       !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
         ? createMetaDeliveryLimit({ reason: sendResult.error })
         : null;
-    const preview = renderTemplateBody(template.body, variables.named);
+    const preview = renderTemplateBody(template.body, variables);
     const messageMetadata = {
       sentByUserId: userId,
       adapter: "lead-google-sheets-flow",
@@ -812,7 +748,9 @@ export async function runGoogleSheetLeadFlow({
       sheetStatusColumnIndex: sheetLead.statusColumnIndex,
       sheetRange,
       leadSendGapMs: sendGapMs,
-      variables: variables.named
+      variableMode: mainTemplateConfig.variableMode,
+      variableMappings: mainTemplateConfig.variables,
+      variables
     };
     const outbound = await createOutboundConversationMessage({
       tenantId,

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, type CSSProperties, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, Fragment, type CSSProperties, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Bot,
@@ -395,7 +395,7 @@ function CompanyIntegrationDrawer({
     setFieldErrors((current) => ({ ...current, [type]: {} }));
     try {
       const title = INTEGRATION_CATALOG[type].title;
-      const config = formValues[type] ?? {};
+      const config = configWithCatalogDefaults(type, formValues[type] ?? {});
       let route = `/api/admin/companies/${company.id}/integrations/${type}`;
       let requestOptions: RequestInit = {};
 
@@ -581,7 +581,7 @@ function buildVisibleDefaults(integrations: IntegrationRecord[]) {
   const defaults: FormValues = {};
   for (const integration of integrations) {
     const type = integration.type as IntegrationType;
-    const values: Record<string, string> = {};
+    const values: Record<string, string> = catalogDefaults(type);
     for (const field of INTEGRATION_CATALOG[type].fields) {
       if (isSensitiveField(type, field.name)) continue;
       const value = integration.maskedDisplay?.[field.name];
@@ -592,6 +592,21 @@ function buildVisibleDefaults(integrations: IntegrationRecord[]) {
     defaults[type] = values;
   }
   return defaults;
+}
+
+function catalogDefaults(type: IntegrationType) {
+  return Object.fromEntries(
+    INTEGRATION_CATALOG[type].fields
+      .filter((field) => field.defaultValue !== undefined)
+      .map((field) => [field.name, field.defaultValue ?? ""])
+  );
+}
+
+function configWithCatalogDefaults(type: IntegrationType, values: Record<string, string>) {
+  return {
+    ...catalogDefaults(type),
+    ...values
+  };
 }
 
 function IntegrationFormCard({
@@ -633,6 +648,7 @@ function IntegrationFormCard({
   const Icon = iconMap[catalog.icon];
   const isKnowledgeBase = type === "KNOWLEDGE_BASE";
   const isPending = (action: string) => Boolean(pending[pendingKey(type, action)]);
+  const previousFieldGroup = (index: number) => catalog.fields[index - 1]?.group;
 
   return (
     <GlassCard className="p-5">
@@ -657,18 +673,24 @@ function IntegrationFormCard({
       ) : null}
 
       <div className="mt-5 space-y-4">
-        {catalog.fields.map((field) => (
-          <IntegrationField
-            key={field.name}
-            type={type}
-            field={field}
-            values={values}
-            error={fieldErrors[field.name]}
-            integration={integration}
-            visible={Boolean(visibleFields[fieldKey(type, field.name)])}
-            onVisibleChange={(visible) => onVisibleChange(field.name, visible)}
-            onChange={(value) => onChange(field.name, value)}
-          />
+        {catalog.fields.map((field, index) => (
+          <Fragment key={field.name}>
+            {field.group && field.group !== previousFieldGroup(index) ? (
+              <div className={cn("border-white/10", index > 0 ? "border-t pt-4" : "")}>
+                <p className="text-sm font-semibold text-white">{field.group}</p>
+              </div>
+            ) : null}
+            <IntegrationField
+              type={type}
+              field={field}
+              values={values}
+              error={fieldErrors[field.name]}
+              integration={integration}
+              visible={Boolean(visibleFields[fieldKey(type, field.name)])}
+              onVisibleChange={(visible) => onVisibleChange(field.name, visible)}
+              onChange={(value) => onChange(field.name, value)}
+            />
+          </Fragment>
         ))}
       </div>
 
@@ -752,7 +774,7 @@ function IntegrationField({
   onVisibleChange: (visible: boolean) => void;
   onChange: (value: string) => void;
 }) {
-  const currentValue = values[field.name] ?? "";
+  const currentValue = values[field.name] ?? field.defaultValue ?? "";
   const maskedValue = integration?.maskedDisplay?.[field.name];
   const protectedField = isSensitiveField(type, field.name);
   const shouldHide = protectedField && !visible;
@@ -799,17 +821,17 @@ function IntegrationField({
           />
           {currentValue ? <p className="mt-2 truncate text-xs text-cyan-100">{currentValue}</p> : null}
         </div>
-      ) : field.input === "password-textarea" ? (
+      ) : field.input === "password-textarea" || field.input === "textarea" ? (
         <div className="relative">
           <textarea
             value={currentValue}
             onChange={(event) => onChange(event.target.value)}
             placeholder={placeholder}
-            rows={4}
+            rows={field.input === "textarea" ? 3 : 4}
             style={shouldHide ? ({ WebkitTextSecurity: "disc" } as CSSProperties) : undefined}
             className="min-h-[112px] w-full resize-y rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-3 pr-11 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/50"
           />
-          <VisibilityButton visible={visible} onClick={() => onVisibleChange(!visible)} />
+          {protectedField ? <VisibilityButton visible={visible} onClick={() => onVisibleChange(!visible)} /> : null}
         </div>
       ) : (
         <div className="relative">

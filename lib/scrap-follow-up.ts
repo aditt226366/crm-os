@@ -14,7 +14,14 @@ import {
   withContactMetaDeliveryLimit,
   withMetaDeliveryLimitMetadata
 } from "@/lib/meta-delivery-limit";
-import { fetchWhatsAppTemplateDetails, renderTemplateBody, sendWhatsAppTemplateMessage } from "@/lib/whatsapp-cloud";
+import {
+  fetchWhatsAppTemplateDetails,
+  renderTemplateBody,
+  resolveWhatsAppTemplateVariables,
+  sendWhatsAppTemplateMessage,
+  type WhatsAppTemplateLead
+} from "@/lib/whatsapp-cloud";
+import { templateVariableConfig, type TemplateVariableConfig, type WhatsAppTemplateRole } from "@/lib/whatsapp-template-config";
 import {
   asRecord,
   readScrapFollowUpState,
@@ -33,18 +40,14 @@ const FOLLOW_UPS = {
   1: {
     waitMs: DAY_MS,
     body: "Hi {{name}}, just checking if you are still looking for custom printing. Reply with product and quantity.",
-    templateEnvName: "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME",
-    templateEnvLanguage: "SCRAP_FOLLOW_UP_1_TEMPLATE_LANGUAGE",
-    candidates: ["scrap_follow_up_1", "scrap_followup_1", "lead_follow_up_1", "follow_up_1"]
+    role: "SCRAP_FOLLOWUP_1"
   },
   2: {
     waitMs: 2 * DAY_MS,
     body: "Hi {{name}}, this is our final follow-up. Let us know if you need custom t-shirts, hoodies, or uniforms.",
-    templateEnvName: "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME",
-    templateEnvLanguage: "SCRAP_FOLLOW_UP_2_TEMPLATE_LANGUAGE",
-    candidates: ["scrap_follow_up_2", "scrap_followup_2", "lead_follow_up_2", "follow_up_2"]
+    role: "SCRAP_FOLLOWUP_2"
   }
-} as const;
+} as const satisfies Record<1 | 2, { waitMs: number; body: string; role: WhatsAppTemplateRole }>;
 
 type FollowUpStep = keyof typeof FOLLOW_UPS;
 
@@ -136,26 +139,10 @@ function contactName(conversation: ConversationForFollowUp) {
   return conversation.contact.name?.trim() || "there";
 }
 
-function variableValue(key: string, conversation: ConversationForFollowUp) {
-  const normalized = key.toLowerCase();
-  if (normalized === "name" || normalized === "customer_name" || normalized === "1") return contactName(conversation);
-  if (normalized === "phone" || normalized === "mobile") return conversation.contact.phone;
-  if (normalized === "city" || normalized === "delivery_city") return "";
-  return contactName(conversation);
-}
-
-function templateVariables(templateBody: string, conversation: ConversationForFollowUp) {
-  const keys = Array.from(templateBody.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)).map((match) => match[1]);
-  const named: Record<string, string> = {};
-  const positional = keys.map((key) => {
-    const value = variableValue(key, conversation);
-    named[key] = value;
-    return value;
-  });
-
+function conversationTemplateInput(conversation: ConversationForFollowUp): WhatsAppTemplateLead {
   return {
-    named,
-    positional: positional.length ? positional : undefined
+    name: contactName(conversation),
+    phone: conversation.contact.phone
   };
 }
 
@@ -211,25 +198,18 @@ async function syncFollowUpTemplateFromMeta({
 
 async function resolveFollowUpTemplate(
   tenantId: string,
-  step: FollowUpStep,
-  templateSettingsConfig: IntegrationConfig
+  templateConfig: TemplateVariableConfig
 ) {
-  const definition = FOLLOW_UPS[step];
-  const configuredName = templateSettingsConfig[definition.templateEnvName]?.trim() || process.env[definition.templateEnvName]?.trim();
-  const configuredLanguage =
-    templateSettingsConfig.WHATSAPP_TEMPLATE_LANGUAGE?.trim() || process.env[definition.templateEnvLanguage]?.trim();
-  if (!configuredName || !configuredLanguage) return null;
-
   const template = await prisma.whatsAppTemplate.findFirst({
     where: {
       tenantId,
-      name: configuredName,
-      language: configuredLanguage,
+      name: templateConfig.name,
+      language: templateConfig.language,
       status: "APPROVED"
     },
     orderBy: { updatedAt: "desc" }
   });
-  return template ?? syncFollowUpTemplateFromMeta({ tenantId, templateName: configuredName, language: configuredLanguage });
+  return template ?? syncFollowUpTemplateFromMeta({ tenantId, templateName: templateConfig.name, language: templateConfig.language });
 }
 
 async function updateContactScrapState({
@@ -316,34 +296,45 @@ async function sendFollowUp({
   userId,
   conversation,
   step,
-  template
+  template,
+  templateConfig
 }: {
   tenantId: string;
   userId: string;
   conversation: ConversationForFollowUp;
   step: FollowUpStep;
   template: NonNullable<Awaited<ReturnType<typeof resolveFollowUpTemplate>>>;
+  templateConfig: TemplateVariableConfig;
 }) {
-  const variables = templateVariables(template.body, conversation);
+  const lead = conversationTemplateInput(conversation);
+  const variables = resolveWhatsAppTemplateVariables({
+    variables: templateConfig.variables,
+    lead
+  });
   const sendResult = await sendWhatsAppTemplateMessage({
     config: await whatsappConfig(tenantId),
     to: conversation.contact.phone,
     templateName: template.name,
     language: template.language,
-    variables: variables.positional
+    variableMode: templateConfig.variableMode,
+    variableMappings: templateConfig.variables,
+    lead
   });
   const deliveryLimit =
     !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
       ? createMetaDeliveryLimit({ reason: sendResult.error })
       : null;
-  const body = renderTemplateBody(template.body, variables.named);
+  const body = renderTemplateBody(template.body, variables);
   const metadata = {
     adapter: SCRAP_FOLLOW_UP_ADAPTER,
     sentByUserId: userId,
     scrapFollowUpStep: step,
     finalAutomaticFollowUp: step === 2,
     templateName: template.name,
-    templateLanguage: template.language
+    templateLanguage: template.language,
+    variableMode: templateConfig.variableMode,
+    variableMappings: templateConfig.variables,
+    variables
   };
   const outbound = await createOutboundConversationMessage({
     tenantId,
@@ -525,6 +516,7 @@ export async function runDueScrapFollowUps({
   });
   const results: ScrapFollowUpRunResult["results"] = [];
   const templateCache = new Map<FollowUpStep, Awaited<ReturnType<typeof resolveFollowUpTemplate>>>();
+  const templateConfigCache = new Map<FollowUpStep, TemplateVariableConfig | null>();
   let attemptedSends = 0;
 
   for (const conversation of conversations) {
@@ -544,8 +536,24 @@ export async function runDueScrapFollowUps({
       continue;
     }
 
+    if (!templateConfigCache.has(due.step)) {
+      templateConfigCache.set(due.step, templateVariableConfig(templateSettingsConfig, FOLLOW_UPS[due.step].role));
+    }
+    const templateConfig = templateConfigCache.get(due.step);
+    if (!templateConfig) {
+      results.push({
+        conversationId: conversation.id,
+        contactId: conversation.contactId,
+        phone: conversation.contact.phone,
+        status: "skipped",
+        step: due.step,
+        reason: `Scrap follow-up ${due.step} variable mapping is not configured.`
+      });
+      continue;
+    }
+
     if (!templateCache.has(due.step)) {
-      templateCache.set(due.step, await resolveFollowUpTemplate(tenantId, due.step, templateSettingsConfig));
+      templateCache.set(due.step, await resolveFollowUpTemplate(tenantId, templateConfig));
     }
     const template = templateCache.get(due.step);
     if (!template) {
@@ -565,7 +573,7 @@ export async function runDueScrapFollowUps({
     }
     attemptedSends += 1;
 
-    const sendResult = await sendFollowUp({ tenantId, userId, conversation, step: due.step, template });
+    const sendResult = await sendFollowUp({ tenantId, userId, conversation, step: due.step, template, templateConfig });
     results.push({
       conversationId: conversation.id,
       contactId: conversation.contactId,

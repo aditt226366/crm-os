@@ -3,6 +3,13 @@ import { INTEGRATION_TYPES, type IntegrationStatus, type IntegrationType } from 
 import { INTEGRATION_CATALOG, integrationFields, isSecretField, isSensitiveField } from "@/lib/integration-catalog";
 import { decryptJson, encryptJson, maskSecret } from "@/lib/security";
 import { IntegrationError } from "@/lib/integrations/types";
+import {
+  parseTemplateVariables,
+  templateConfigDefinition,
+  templateVariableConfig,
+  type TemplateVariableConfig,
+  type WhatsAppTemplateRole
+} from "@/lib/whatsapp-template-config";
 
 export type IntegrationConfig = Record<string, string>;
 
@@ -239,6 +246,21 @@ function failure(message: string, field?: string): VerificationResult {
 
 function success(message: string, metadata?: Record<string, unknown>): VerificationResult {
   return { status: "CONNECTED", message, metadata };
+}
+
+function missingRequiredTemplateConfig(config: IntegrationConfig, role: WhatsAppTemplateRole) {
+  const definition = templateConfigDefinition(role);
+  const name = definition.nameFields.some((field) => !missingOrEmpty(config, field));
+  const language = definition.languageFields.some((field) => !missingOrEmpty(config, field));
+  if (!name) return `${definition.nameFields[0]} wrong`;
+  if (!language) return `${definition.languageFields[0]} wrong`;
+  if (missingOrEmpty(config, definition.variableModeField)) return `${definition.variableModeField} wrong`;
+  if (missingOrEmpty(config, definition.variablesField)) return `${definition.variablesField} wrong`;
+
+  const parsedVariables = parseTemplateVariables(config[definition.variablesField], definition.defaultVariables);
+  if (!parsedVariables.ok) return `${definition.variablesField} wrong`;
+  if (!templateVariableConfig(config, role)) return `${definition.variableModeField} wrong`;
+  return null;
 }
 
 async function fetchJson(
@@ -514,42 +536,31 @@ async function fetchMetaTemplatesByName({
 }
 
 async function verifyApprovedMetaTemplate({
-  config,
   whatsappConfig,
-  templateNameField,
-  languageField = "WHATSAPP_TEMPLATE_LANGUAGE"
+  templateConfig
 }: {
-  config: IntegrationConfig;
   whatsappConfig: IntegrationConfig;
-  templateNameField: string;
-  languageField?: string;
+  templateConfig: TemplateVariableConfig;
 }): Promise<MetaTemplateSummary | VerificationResult> {
-  if (missingOrEmpty(config, templateNameField)) {
-    return failure(`${templateNameField} wrong`, templateNameField);
-  }
-  if (missingOrEmpty(config, languageField)) {
-    return failure(`${languageField} wrong`, languageField);
-  }
-
   const templates = await fetchMetaTemplatesByName({
     whatsappConfig,
-    templateName: config[templateNameField],
-    field: templateNameField
+    templateName: templateConfig.name,
+    field: templateConfig.fields.name
   });
   if (!Array.isArray(templates)) {
     return templates;
   }
 
-  const nameMatch = templates.filter((template) => template.name === config[templateNameField]);
+  const nameMatch = templates.filter((template) => template.name === templateConfig.name);
   if (!nameMatch.length) {
-    return failure(`${templateNameField} wrong`, templateNameField);
+    return failure(`${templateConfig.fields.name} wrong`, templateConfig.fields.name);
   }
-  const languageMatch = nameMatch.find((template) => template.language === config[languageField]);
+  const languageMatch = nameMatch.find((template) => template.language === templateConfig.language);
   if (!languageMatch) {
-    return failure(`${languageField} wrong`, languageField);
+    return failure(`${templateConfig.fields.language} wrong`, templateConfig.fields.language);
   }
   if (languageMatch.status !== "APPROVED") {
-    return failure(`${templateNameField} is not approved`, templateNameField);
+    return failure(`${templateConfig.fields.name} is not approved`, templateConfig.fields.name);
   }
   return languageMatch;
 }
@@ -574,29 +585,29 @@ async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: 
     return failure("WhatsApp Cloud API is not connected.");
   }
 
-  const welcomeTemplate = await verifyApprovedMetaTemplate({
-    config,
-    whatsappConfig,
-    templateNameField: "WHATSAPP_TEMPLATE_NAME"
-  });
+  const missingConfig =
+    missingRequiredTemplateConfig(config, "MAIN") ??
+    missingRequiredTemplateConfig(config, "SCRAP_FOLLOWUP_1") ??
+    missingRequiredTemplateConfig(config, "SCRAP_FOLLOWUP_2");
+  if (missingConfig) {
+    return failure(missingConfig);
+  }
+
+  const mainTemplateConfig = templateVariableConfig(config, "MAIN")!;
+  const scrapFollowUp1Config = templateVariableConfig(config, "SCRAP_FOLLOWUP_1")!;
+  const scrapFollowUp2Config = templateVariableConfig(config, "SCRAP_FOLLOWUP_2")!;
+
+  const welcomeTemplate = await verifyApprovedMetaTemplate({ whatsappConfig, templateConfig: mainTemplateConfig });
   if (isVerificationResult(welcomeTemplate)) {
     return welcomeTemplate;
   }
 
-  const scrapFollowUp1Template = await verifyApprovedMetaTemplate({
-    config,
-    whatsappConfig,
-    templateNameField: "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME"
-  });
+  const scrapFollowUp1Template = await verifyApprovedMetaTemplate({ whatsappConfig, templateConfig: scrapFollowUp1Config });
   if (isVerificationResult(scrapFollowUp1Template)) {
     return scrapFollowUp1Template;
   }
 
-  const scrapFollowUp2Template = await verifyApprovedMetaTemplate({
-    config,
-    whatsappConfig,
-    templateNameField: "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME"
-  });
+  const scrapFollowUp2Template = await verifyApprovedMetaTemplate({ whatsappConfig, templateConfig: scrapFollowUp2Config });
   if (isVerificationResult(scrapFollowUp2Template)) {
     return scrapFollowUp2Template;
   }
@@ -610,9 +621,17 @@ async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: 
     scrapFollowUp1TemplateName: scrapFollowUp1Template.name,
     scrapFollowUp2TemplateName: scrapFollowUp2Template.name,
     templates: {
-      welcome: templateMetadata(welcomeTemplate),
-      scrapFollowUp1: templateMetadata(scrapFollowUp1Template),
-      scrapFollowUp2: templateMetadata(scrapFollowUp2Template)
+      welcome: { ...templateMetadata(welcomeTemplate), variableMode: mainTemplateConfig.variableMode, variables: mainTemplateConfig.variables },
+      scrapFollowUp1: {
+        ...templateMetadata(scrapFollowUp1Template),
+        variableMode: scrapFollowUp1Config.variableMode,
+        variables: scrapFollowUp1Config.variables
+      },
+      scrapFollowUp2: {
+        ...templateMetadata(scrapFollowUp2Template),
+        variableMode: scrapFollowUp2Config.variableMode,
+        variables: scrapFollowUp2Config.variables
+      }
     }
   });
 }
@@ -785,9 +804,11 @@ export async function verifyIntegrationConfig(type: IntegrationType, config: Int
   }
 
   const fields = INTEGRATION_CATALOG[type].fields;
-  for (const field of fields) {
-    if (field.required && missingOrEmpty(config, field.name)) {
-      return failure(`${field.name} wrong`);
+  if (type !== "WHATSAPP_TEMPLATE_SETTINGS") {
+    for (const field of fields) {
+      if (field.required && missingOrEmpty(config, field.name)) {
+        return failure(`${field.name} wrong`);
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 import { ApiError } from "@/lib/api";
 import type { IntegrationConfig } from "@/lib/integration-vault";
 import { normalizePhone } from "@/lib/inbox";
+import type { WhatsAppTemplateVariableMode } from "@/lib/whatsapp-template-config";
 
 type WhatsAppSendResult = {
   ok: boolean;
@@ -16,7 +17,15 @@ export type WhatsAppTemplateComponentPayload = {
   parameters: Array<{
     type: "text";
     text: string;
+    parameter_name?: string;
   }>;
+};
+
+export type WhatsAppTemplateLead = {
+  name?: string | null;
+  phone?: string | null;
+  status?: string | null;
+  row?: string[] | null;
 };
 
 function graphApiVersion() {
@@ -98,11 +107,96 @@ export function renderTemplateBody(body: string, variables?: Record<string, stri
   return body.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, key: string) => variables?.[key] ?? `{{${key}}}`);
 }
 
+function safeLeadName(lead?: WhatsAppTemplateLead) {
+  return lead?.name?.trim() || "there";
+}
+
+function variableValueFromPath(path: string, lead?: WhatsAppTemplateLead) {
+  const normalized = path.trim().toLowerCase();
+  if (normalized === "lead.name" || normalized === "contact.name" || normalized === "name" || normalized === "customer_name") {
+    return safeLeadName(lead);
+  }
+  if (normalized === "lead.phone" || normalized === "contact.phone" || normalized === "phone") {
+    return lead?.phone?.trim() || safeLeadName(lead);
+  }
+  if (normalized === "lead.status" || normalized === "status") {
+    return lead?.status?.trim() || "new";
+  }
+  const rowMatch = normalized.match(/^lead\.row\[(\d+)\]$/);
+  if (rowMatch) {
+    return lead?.row?.[Number(rowMatch[1])]?.trim() || safeLeadName(lead);
+  }
+  if (normalized.startsWith("literal:")) {
+    return path.slice("literal:".length).trim() || safeLeadName(lead);
+  }
+  return safeLeadName(lead);
+}
+
+export function resolveWhatsAppTemplateVariables({
+  variables,
+  lead
+}: {
+  variables?: Record<string, string>;
+  lead?: WhatsAppTemplateLead;
+}) {
+  return Object.fromEntries(
+    Object.entries(variables ?? {}).map(([key, path]) => [key, variableValueFromPath(path, lead)])
+  );
+}
+
+function numberedVariableEntries(values: Record<string, string>) {
+  return Object.entries(values).sort(([left], [right]) => {
+    const leftNumber = Number(left);
+    const rightNumber = Number(right);
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber;
+    return left.localeCompare(right);
+  });
+}
+
+export function buildWhatsAppTemplatePayload({
+  to,
+  templateName,
+  language,
+  variableMode = "NUMBERED",
+  variables,
+  lead
+}: {
+  to: string;
+  templateName: string;
+  language: string;
+  variableMode?: WhatsAppTemplateVariableMode;
+  variables?: Record<string, string>;
+  lead?: WhatsAppTemplateLead;
+}) {
+  const resolvedVariables = resolveWhatsAppTemplateVariables({ variables, lead });
+  const entries =
+    variableMode === "NUMBERED" ? numberedVariableEntries(resolvedVariables) : Object.entries(resolvedVariables);
+  const parameters = entries.map(([key, text]) => ({
+    type: "text" as const,
+    ...(variableMode === "NAMED" ? { parameter_name: key } : {}),
+    text
+  }));
+  const components = parameters.length ? [{ type: "body", parameters }] : undefined;
+
+  return {
+    to: toWhatsAppRecipient(to),
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: language },
+      ...(components ? { components } : {})
+    }
+  };
+}
+
 export async function sendWhatsAppTemplateMessage({
   config,
   to,
   templateName,
   language,
+  variableMode,
+  variableMappings,
+  lead,
   variables,
   components
 }: {
@@ -110,9 +204,26 @@ export async function sendWhatsAppTemplateMessage({
   to: string;
   templateName: string;
   language: string;
+  variableMode?: WhatsAppTemplateVariableMode;
+  variableMappings?: Record<string, string>;
+  lead?: WhatsAppTemplateLead;
   variables?: string[];
   components?: WhatsAppTemplateComponentPayload[];
 }) {
+  if (variableMappings) {
+    return postWhatsAppMessage(
+      config,
+      buildWhatsAppTemplatePayload({
+        to,
+        templateName,
+        language,
+        variableMode,
+        variables: variableMappings,
+        lead
+      })
+    );
+  }
+
   const templateComponents =
     components ??
     (variables && variables.length
