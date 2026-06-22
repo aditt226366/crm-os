@@ -26,6 +26,7 @@ import {
   activeMetaDeliveryLimitFromMessage,
   createMetaDeliveryLimit,
   isMetaDeliveryLimitError,
+  META_DELIVERY_LIMIT_DISPLAY,
   metaDeliveryLimitReason,
   withContactMetaDeliveryLimit,
   withMetaDeliveryLimitMetadata
@@ -325,6 +326,10 @@ async function safeMarkSheetLeadStatus({
 
 async function safeMarkSheetLeadMessaged(input: Omit<Parameters<typeof safeMarkSheetLeadStatus>[0], "status">) {
   return safeMarkSheetLeadStatus({ ...input, status: "messaged" });
+}
+
+function sheetFailureStatus(reason: string | null | undefined) {
+  return reason?.trim() || "WhatsApp send failed";
 }
 
 async function currentFlowIntegrations(tenantId: string) {
@@ -719,6 +724,12 @@ export async function runGoogleSheetLeadFlow({
     });
 
     if (contact.optOut) {
+      await safeMarkSheetLeadStatus({
+        config: sheetsConfig,
+        range: sheetRange,
+        lead: sheetLead,
+        status: sheetFailureStatus("Contact opted out")
+      });
       results.push({ phone: contact.phone, status: "skipped", reason: "Contact opted out", rowNumber: sheetLead.rowNumber });
       continue;
     }
@@ -729,16 +740,17 @@ export async function runGoogleSheetLeadFlow({
       customFields: contact.customFields
     });
     if (deliveryLimit) {
+      const failureReason = metaDeliveryLimitReason(deliveryLimit);
       await safeMarkSheetLeadStatus({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: "Meta delivery-limited"
+        status: META_DELIVERY_LIMIT_DISPLAY
       });
       results.push({
         phone: contact.phone,
         status: "META_DELIVERY_LIMITED",
-        reason: metaDeliveryLimitReason(deliveryLimit),
+        reason: failureReason,
         retryAfter: deliveryLimit.retryAfter,
         rowNumber: sheetLead.rowNumber,
         sheetStatus: sheetLead.status ?? null
@@ -809,18 +821,19 @@ export async function runGoogleSheetLeadFlow({
           ) as Prisma.InputJsonValue
         }
       });
+      const failureReason = metaDeliveryLimitReason(immediateDeliveryLimit);
       await safeMarkSheetLeadStatus({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: "Meta delivery-limited"
+        status: META_DELIVERY_LIMIT_DISPLAY
       });
     } else if (!sendResult.ok) {
       await safeMarkSheetLeadStatus({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: "failed"
+        status: sheetFailureStatus(sendResult.error)
       });
     }
 

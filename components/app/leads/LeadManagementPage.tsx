@@ -133,7 +133,7 @@ export function LeadManagementPage() {
   const [maxRows, setMaxRows] = useState(200);
   const flowRunningRef = useRef(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setError(null);
     const response = await fetch("/api/app/leads", { cache: "no-store" });
     const payload = await response.json();
@@ -141,7 +141,7 @@ export function LeadManagementPage() {
       throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
     }
     setData(payload as LeadData);
-  }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -209,13 +209,24 @@ export function LeadManagementPage() {
 
   useEffect(() => {
     if (!ready) return;
-    const sync = () => {
-      runFlow({ silent: true }).catch((syncError: Error) => setError(syncError.message));
+    let active = true;
+    const sync = async () => {
+      if (flowRunningRef.current) return;
+      setAutoSyncing(true);
+      try {
+        await load();
+      } catch (syncError) {
+        if (active) setError(syncError instanceof Error ? syncError.message : "Unable to refresh lead flow");
+      } finally {
+        if (active) setAutoSyncing(false);
+      }
     };
-    sync();
-    const interval = window.setInterval(sync, 60_000);
-    return () => window.clearInterval(interval);
-  }, [ready, runFlow]);
+    const interval = window.setInterval(sync, 5_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [load, ready]);
 
   return (
     <FeatureGuard featureKey="LEAD_MANAGEMENT">

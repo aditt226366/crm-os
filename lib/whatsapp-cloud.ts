@@ -28,6 +28,21 @@ function toWhatsAppRecipient(phone: string) {
   return normalizePhone(phone).replace(/^\+/, "");
 }
 
+function metaErrorText(data: unknown, fallback: string) {
+  if (!data || typeof data !== "object" || !("error" in data)) {
+    return fallback;
+  }
+
+  const error = (data as { error?: { message?: string; code?: string | number; error_subcode?: string | number } }).error;
+  const parts = [
+    error?.message,
+    error?.code === undefined ? null : `code ${error.code}`,
+    error?.error_subcode === undefined ? null : `subcode ${error.error_subcode}`
+  ].filter(Boolean);
+
+  return parts.join(" | ") || fallback;
+}
+
 async function postWhatsAppMessage(config: IntegrationConfig, payload: Record<string, unknown>): Promise<WhatsAppSendResult> {
   const phoneNumberId = config.WHATSAPP_PHONE_NUMBER_ID?.trim();
   const accessToken = config.WHATSAPP_ACCESS_TOKEN?.trim();
@@ -71,16 +86,11 @@ async function postWhatsAppMessage(config: IntegrationConfig, payload: Record<st
     data && typeof data === "object" && Array.isArray((data as { messages?: unknown[] }).messages)
       ? ((data as { messages: Array<{ id?: string }> }).messages[0]?.id)
       : undefined;
-  const errorMessage =
-    data && typeof data === "object" && "error" in data
-      ? (data as { error?: { message?: string } }).error?.message
-      : undefined;
-
   return {
     ok: response.ok,
     status: response.status,
     whatsappMessageId: messageId,
-    error: response.ok ? undefined : (errorMessage ?? (text || "WhatsApp message failed."))
+    error: response.ok ? undefined : metaErrorText(data, text || "WhatsApp message failed.")
   };
 }
 

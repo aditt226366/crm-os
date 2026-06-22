@@ -277,8 +277,8 @@ export async function POST(request: NextRequest) {
         data: {
           conversationId: conversation.id,
           messageId: outbound.message.id,
-          status: sendResult.ok ? "SENT" : "FAILED",
-          error: sendResult.error ?? null,
+          status: sendResult.ok ? "SENT" : immediateDeliveryLimit ? "SKIPPED" : "FAILED",
+          error: immediateDeliveryLimit ? metaDeliveryLimitReason(immediateDeliveryLimit) : (sendResult.error ?? null),
           sentAt: sendResult.ok ? new Date() : null
         }
       });
