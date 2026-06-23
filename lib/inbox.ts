@@ -57,6 +57,7 @@ export function serializeConversation(conversation: {
   unreadCount: number;
   humanTakeover: boolean;
   customerReplyCount: number;
+  aiRepliesStopped: boolean;
   totalMessageCount: number;
   lastMessageText: string | null;
   lastMessageAt: Date | null;
@@ -95,6 +96,7 @@ export function serializeConversation(conversation: {
     status: conversation.status,
     unreadCount: conversation.unreadCount,
     humanTakeover: conversation.humanTakeover,
+    aiRepliesStopped: conversation.aiRepliesStopped,
     customerReplyCount: conversation.customerReplyCount,
     totalMessageCount: conversation.totalMessageCount,
     lastMessageText: conversation.lastMessageText,

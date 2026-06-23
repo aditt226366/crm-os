@@ -31,6 +31,7 @@ type Conversation = {
   status: string;
   unreadCount: number;
   humanTakeover: boolean;
+  aiRepliesStopped: boolean;
   customerReplyCount: number;
   totalMessageCount: number;
   lastMessageText: string | null;
@@ -231,6 +232,7 @@ function ConversationRow({
           </span>
         ) : null}
         {conversation.humanTakeover ? <StatusBadge value="HUMAN" /> : null}
+        {conversation.aiRepliesStopped ? <StatusBadge value="AI STOPPED" /> : null}
         {conversation.contact.tags.includes("SCRAP_DORMANT") ? <StatusBadge value="SCRAP_DORMANT" /> : null}
       </div>
     </button>
@@ -419,12 +421,14 @@ function Composer({
   disabled,
   onSend,
   onHumanTakeover,
+  onToggleAiReplies,
   onAttachment
 }: {
   selected: Conversation | null;
   disabled: boolean;
   onSend: (body: string) => Promise<void>;
   onHumanTakeover: () => Promise<void>;
+  onToggleAiReplies: (stopped: boolean) => Promise<void>;
   onAttachment: (file: File, caption?: string) => Promise<void>;
 }) {
   const [body, setBody] = useState("");
@@ -472,6 +476,19 @@ function Composer({
           className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {selected?.humanTakeover ? "In human queue" : "Assign to human"}
+        </button>
+        <button
+          type="button"
+          onClick={() => selected && onToggleAiReplies(!selected.aiRepliesStopped)}
+          disabled={!selected}
+          className={cn(
+            "rounded-full border px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-50",
+            selected?.aiRepliesStopped
+              ? "border-amber-300/30 bg-amber-300/10 font-semibold text-amber-100"
+              : "border-white/10 bg-white/[0.04] text-slate-300"
+          )}
+        >
+          {selected?.aiRepliesStopped ? "Resume AI replies" : "Stop AI replies"}
         </button>
       </div>
       <div className="flex items-end gap-2 rounded-[24px] border border-white/10 bg-white/[0.04] p-2">
@@ -768,6 +785,17 @@ export function InboxPage() {
     setNotice("Conversation added to Human Queue.");
   }
 
+  async function toggleAiReplies(stopped: boolean) {
+    if (!selected) return;
+    try {
+      const data = await postAction(`/api/app/inbox/conversations/${selected.id}/ai-replies`, { stopped });
+      if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
+      setNotice(stopped ? "AI replies stopped for this chat." : "AI replies resumed for this chat.");
+    } catch (toggleError) {
+      setError(toggleError instanceof Error ? toggleError.message : "AI reply setting update failed");
+    }
+  }
+
   async function addNote(body: string) {
     if (!selected) return;
     const data = await postAction(`/api/app/inbox/conversations/${selected.id}/notes`, { body });
@@ -880,6 +908,7 @@ export function InboxPage() {
                 <p className="text-sm text-slate-500">Select a conversation</p>
               )}
               {selected?.humanTakeover ? <StatusBadge value="HUMAN TAKEOVER" /> : null}
+              {selected?.aiRepliesStopped ? <StatusBadge value="AI REPLIES STOPPED" /> : null}
             </div>
 
             <div ref={scrollRef} className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-950/30 p-4">
@@ -913,6 +942,7 @@ export function InboxPage() {
               disabled={serviceWindowClosed}
               onSend={sendReply}
               onHumanTakeover={humanTakeover}
+              onToggleAiReplies={toggleAiReplies}
               onAttachment={sendAttachment}
             />
           </GlassCard>

@@ -419,6 +419,7 @@ model Conversation {
   unreadCount                    Int                  @default(0)
   humanTakeover                  Boolean              @default(false)
   humanQueueId                   String?
+  aiRepliesStopped               Boolean              @default(false)
   customerReplyCount             Int                  @default(0)
   totalMessageCount              Int                  @default(0)
   lastMessageText                String?
