@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   Check,
@@ -229,6 +229,47 @@ function ConversationRow({
         {conversation.contact.tags.includes("SCRAP_DORMANT") ? <StatusBadge value="SCRAP_DORMANT" /> : null}
       </div>
     </button>
+  );
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function messageDateKey(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function formatMessageDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const today = new Date();
+  const diffDays = Math.round((startOfLocalDay(today) - startOfLocalDay(date)) / 86_400_000);
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+
+  return date.toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+    ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" })
+  });
+}
+
+function MessageDateSeparator({ value }: { value: string }) {
+  const label = formatMessageDate(value);
+  if (!label) return null;
+
+  return (
+    <div className="flex justify-center py-1">
+      <span className="rounded-full border border-white/10 bg-slate-900/85 px-3 py-1 text-[11px] font-semibold text-slate-300 shadow-lg shadow-slate-950/20 backdrop-blur">
+        {label}
+      </span>
+    </div>
   );
 }
 
@@ -709,7 +750,18 @@ export function InboxPage() {
               {loadingThread ? (
                 <LoadingSkeleton rows={8} />
               ) : messages.length ? (
-                messages.map((message) => <MessageBubble key={message.id} message={message} />)
+                messages.map((message, index) => {
+                  const previousMessage = messages[index - 1];
+                  const showDateSeparator =
+                    !previousMessage || messageDateKey(previousMessage.createdAt) !== messageDateKey(message.createdAt);
+
+                  return (
+                    <Fragment key={message.id}>
+                      {showDateSeparator ? <MessageDateSeparator value={message.createdAt} /> : null}
+                      <MessageBubble message={message} />
+                    </Fragment>
+                  );
+                })
               ) : (
                 <div className="grid h-full place-items-center text-center text-sm text-slate-500">
                   <div>
