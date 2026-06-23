@@ -226,7 +226,7 @@ export async function handleAiAgentInboundReply({
     }
   });
 
-  if (!conversation || conversation.humanTakeover || conversation.contact.optOut) {
+  if (!conversation || conversation.contact.optOut) {
     return { ok: false, skipped: true };
   }
 
