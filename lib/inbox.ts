@@ -4,6 +4,8 @@ import { recalculateConversationLeadTemperature } from "@/lib/lead-temperature";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { SCRAP_DORMANT_TAG, withoutScrapDormantTag } from "@/lib/scrap-follow-up-state";
 
+type ConversationMessageType = "TEXT" | "TEMPLATE" | "IMAGE" | "DOCUMENT" | "AUDIO" | "VIDEO" | "SYSTEM" | "NOTE";
+
 export function normalizePhone(phone: string) {
   const trimmed = phone.trim();
   if (trimmed.startsWith("+")) {
@@ -148,6 +150,8 @@ export async function upsertInboundConversationMessage({
   name,
   body,
   messageId,
+  type = "TEXT",
+  metadata,
   source = "ORGANIC",
   sourceId
 }: {
@@ -156,6 +160,8 @@ export async function upsertInboundConversationMessage({
   name?: string;
   body: string;
   messageId?: string;
+  type?: Extract<ConversationMessageType, "TEXT" | "IMAGE" | "DOCUMENT" | "AUDIO" | "VIDEO">;
+  metadata?: unknown;
   source?: "BROADCAST" | "CAMPAIGN" | "AD" | "ORGANIC" | "GOOGLE_SHEET" | "MANUAL";
   sourceId?: string;
 }) {
@@ -234,17 +240,26 @@ export async function upsertInboundConversationMessage({
       }
     }));
 
+  const messageMetadata =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? { source, sourceId, ...(metadata as Record<string, unknown>) }
+      : { source, sourceId };
+
+  const previewBody =
+    body ||
+    (type === "IMAGE" ? "Image" : type === "DOCUMENT" ? "Document" : type === "AUDIO" ? "Audio" : type === "VIDEO" ? "Video" : "");
+
   const message = await prisma.message.create({
     data: {
       tenantId,
       conversationId: conversation.id,
       contactId: contact.id,
       direction: "INBOUND",
-      type: "TEXT",
-      body,
+      type,
+      body: previewBody,
       whatsappMessageId: messageId,
       status: "RECEIVED",
-      metadata: { source, sourceId }
+      metadata: messageMetadata
     }
   });
 
@@ -255,7 +270,7 @@ export async function upsertInboundConversationMessage({
       sourceId: conversation.sourceId ?? sourceId,
       status: "OPEN",
       unreadCount: { increment: 1 },
-      lastMessageText: body,
+      lastMessageText: previewBody,
       lastMessageAt: now,
       customerServiceWindowExpiresAt: serviceWindow,
       totalMessageCount: { increment: 1 },
@@ -303,7 +318,7 @@ export async function createOutboundConversationMessage({
   tenantId: string;
   conversationId: string;
   body: string;
-  type?: "TEXT" | "TEMPLATE" | "NOTE";
+  type?: ConversationMessageType;
   templateId?: string;
   metadata?: unknown;
   status?: "PENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED";

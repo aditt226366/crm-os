@@ -2,17 +2,16 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bot,
   Check,
   CheckCheck,
   Clock,
+  Download,
   FileText,
   MessageSquarePlus,
   Paperclip,
   Search,
   Send,
   Smile,
-  UserRoundCheck,
   Users
 } from "lucide-react";
 import { FeatureGuard } from "@/components/app/FeatureGuard";
@@ -75,13 +74,16 @@ type Message = {
   updatedAt: string;
 };
 
-type Template = {
-  id: string;
-  name: string;
-  category: string;
-  language: string;
-  status: string;
-  body: string;
+type MessageAttachment = {
+  id?: string;
+  fileName?: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+  dataUrl?: string;
+  url?: string;
+  downloadError?: string;
+  storageNote?: string;
 };
 
 const filters = [
@@ -101,6 +103,7 @@ const filters = [
 type InboxFilter = (typeof filters)[number][0];
 
 const confirmedOrderStatuses = new Set(["CONFIRMED", "DISPATCHED", "COMPLETED"]);
+const emojiOptions = ["😀", "😂", "😊", "😍", "👍", "🙏", "🔥", "🎉", "✅", "❤️", "👌", "🤝", "😎", "😇", "🙌", "💯"];
 
 function relativeTime(value: string | null) {
   if (!value) return "";
@@ -137,13 +140,15 @@ function conversationCustomerReplyCount(conversation: Conversation) {
 
 function matchesActiveFilter(conversation: Conversation, filter: string) {
   const customerReplyCount = conversationCustomerReplyCount(conversation);
+  const inHumanQueue = conversation.humanTakeover || Boolean(conversation.humanQueue);
   if (filter === "all") return true;
+  if (filter === "human-queue") return inHumanQueue;
+  if (inHumanQueue) return false;
   if (conversation.hasFailedMessages || conversation.hasMetaDeliveryLimitedMessages) return false;
   if (filter === "unread") return conversation.unreadCount > 0;
   if (filter === "hot") return customerReplyCount >= 6;
   if (filter === "warm") return customerReplyCount >= 2 && customerReplyCount <= 5;
   if (filter === "scrap") return customerReplyCount <= 1;
-  if (filter === "human-queue") return conversation.humanTakeover || Boolean(conversation.humanQueue);
   if (filter === "orders") return Boolean(conversation.order && confirmedOrderStatuses.has(conversation.order.status));
   if (filter === "broadcast") return conversation.source === "BROADCAST";
   if (filter === "campaign") return conversation.source === "CAMPAIGN";
@@ -273,6 +278,94 @@ function MessageDateSeparator({ value }: { value: string }) {
   );
 }
 
+function metadataRecord(metadata: unknown) {
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? (metadata as Record<string, unknown>) : {};
+}
+
+function messageAttachments(message: Message): MessageAttachment[] {
+  const attachments = metadataRecord(message.metadata).attachments;
+  if (!Array.isArray(attachments)) return [];
+
+  return attachments.filter((attachment): attachment is MessageAttachment => {
+    return Boolean(attachment && typeof attachment === "object" && !Array.isArray(attachment));
+  });
+}
+
+function attachmentName(attachment: MessageAttachment) {
+  return attachment.fileName || attachment.name || "Attachment";
+}
+
+function attachmentUrl(attachment: MessageAttachment) {
+  return attachment.dataUrl || attachment.url || "";
+}
+
+function formatAttachmentSize(size?: number) {
+  if (!size) return "";
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function bodyIsAttachmentFallback(body: string, attachments: MessageAttachment[]) {
+  const normalized = body.trim().toLowerCase();
+  if (!attachments.length || !normalized) return false;
+  if (["image", "document", "audio", "video"].includes(normalized)) return true;
+  return attachments.some((attachment) => attachmentName(attachment).trim().toLowerCase() === normalized);
+}
+
+function AttachmentPreview({ attachment, outgoing }: { attachment: MessageAttachment; outgoing: boolean }) {
+  const url = attachmentUrl(attachment);
+  const name = attachmentName(attachment);
+  const mimeType = attachment.mimeType || "application/octet-stream";
+  const isImage = mimeType.startsWith("image/");
+  const isPdf = mimeType === "application/pdf";
+  const detail = [isPdf ? "PDF document" : mimeType, formatAttachmentSize(attachment.size)].filter(Boolean).join(" | ");
+
+  if (isImage && url) {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-xl border border-white/10 bg-slate-950/40">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={name} className="max-h-72 w-full object-contain" />
+      </a>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+      <div className="flex items-center gap-3">
+        <div className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl", outgoing ? "bg-cyan-300/10" : "bg-white/10")}>
+          <FileText className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">{name}</p>
+          <p className="mt-0.5 truncate text-xs opacity-70">{detail || "Attachment"}</p>
+        </div>
+      </div>
+      {url ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs font-semibold"
+          >
+            View
+          </a>
+          <a
+            href={url}
+            download={name}
+            className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs font-semibold"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Download
+          </a>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-amber-100">{attachment.downloadError || attachment.storageNote || "Attachment preview is not available."}</p>
+      )}
+    </div>
+  );
+}
+
 function MessageBubble({ message }: { message: Message }) {
   if (message.type === "NOTE") {
     return (
@@ -283,6 +376,10 @@ function MessageBubble({ message }: { message: Message }) {
   }
 
   const outgoing = message.direction === "OUTBOUND";
+  const attachments = messageAttachments(message);
+  const bodyText = message.body.trim();
+  const showBody = bodyText && !bodyIsAttachmentFallback(bodyText, attachments);
+
   return (
     <div className={cn("flex", outgoing ? "justify-end" : "justify-start")}>
       <div
@@ -300,7 +397,14 @@ function MessageBubble({ message }: { message: Message }) {
             Template
           </p>
         ) : null}
-        <p className="whitespace-pre-wrap break-words">{message.body}</p>
+        {attachments.length ? (
+          <div className="mb-2 space-y-2">
+            {attachments.map((attachment, index) => (
+              <AttachmentPreview key={attachment.id || `${attachmentName(attachment)}-${index}`} attachment={attachment} outgoing={outgoing} />
+            ))}
+          </div>
+        ) : null}
+        {showBody ? <p className="whitespace-pre-wrap break-words">{message.body}</p> : null}
         <div className={cn("mt-2 flex items-center gap-2 text-[11px]", outgoing ? "justify-end text-cyan-100/70" : "text-slate-500")}>
           <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
           {outgoing ? messageStatusIcon(message) : null}
@@ -312,26 +416,26 @@ function MessageBubble({ message }: { message: Message }) {
 
 function Composer({
   selected,
-  templates,
   disabled,
   onSend,
-  onTemplate,
-  onResolve,
-  onHumanTakeover
+  onHumanTakeover,
+  onAttachment
 }: {
   selected: Conversation | null;
-  templates: Template[];
   disabled: boolean;
   onSend: (body: string) => Promise<void>;
-  onTemplate: (template: Template) => Promise<void>;
-  onResolve: () => Promise<void>;
   onHumanTakeover: () => Promise<void>;
+  onAttachment: (file: File, caption?: string) => Promise<void>;
 }) {
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const busy = sending || uploading;
 
   async function submit() {
-    if (!body.trim() || disabled) return;
+    if (!selected || !body.trim() || disabled || busy) return;
     setSending(true);
     try {
       await onSend(body.trim());
@@ -341,7 +445,17 @@ function Composer({
     }
   }
 
-  const firstTemplate = templates.find((template) => template.status === "APPROVED");
+  async function attachFile(file: File) {
+    if (!selected || disabled || busy) return;
+    setUploading(true);
+    try {
+      await onAttachment(file, body.trim() || undefined);
+      setBody("");
+      setShowEmojiPicker(false);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   return (
     <div className="border-t border-white/10 bg-slate-950/72 p-3">
@@ -351,37 +465,67 @@ function Composer({
         </div>
       ) : null}
       <div className="mb-3 flex flex-wrap gap-2">
-        <button type="button" className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300">
-          <Bot className="mr-1 inline h-3.5 w-3.5" />
-          AI suggested reply
-        </button>
         <button
           type="button"
-          onClick={() => firstTemplate && onTemplate(firstTemplate)}
-          disabled={!firstTemplate}
-          className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300 disabled:opacity-40"
+          onClick={onHumanTakeover}
+          disabled={!selected || selected.humanTakeover}
+          className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <FileText className="mr-1 inline h-3.5 w-3.5" />
-          Use approved template
-        </button>
-        <button type="button" onClick={onResolve} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300">
-          Mark resolved
-        </button>
-        <button type="button" onClick={onHumanTakeover} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300">
-          Assign to human
+          {selected?.humanTakeover ? "In human queue" : "Assign to human"}
         </button>
       </div>
       <div className="flex items-end gap-2 rounded-[24px] border border-white/10 bg-white/[0.04] p-2">
-        <button type="button" className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-400">
-          <Smile className="h-4 w-4" />
-        </button>
-        <button type="button" className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-400">
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="Choose emoji"
+            onClick={() => setShowEmojiPicker((current) => !current)}
+            disabled={!selected || disabled}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Smile className="h-4 w-4" />
+          </button>
+          {showEmojiPicker ? (
+            <div className="absolute bottom-12 left-0 z-20 grid w-56 grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-slate-950/95 p-2 shadow-2xl shadow-slate-950/40 backdrop-blur">
+              {emojiOptions.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => {
+                    setBody((current) => `${current}${emoji}`);
+                    setShowEmojiPicker(false);
+                  }}
+                  className="grid h-10 place-items-center rounded-xl text-lg transition hover:bg-white/[0.08]"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          aria-label="Attach file"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={!selected || disabled || busy}
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
           <Paperclip className="h-4 w-4" />
         </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.currentTarget.value = "";
+            if (file) void attachFile(file);
+          }}
+        />
         <textarea
           value={body}
           onChange={(event) => setBody(event.target.value)}
-          disabled={!selected || disabled || sending}
+          disabled={!selected || disabled || busy}
           placeholder={selected ? "Type a manual reply..." : "Select a conversation"}
           className="max-h-36 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-white outline-none placeholder:text-slate-600 disabled:cursor-not-allowed"
           onKeyDown={(event) => {
@@ -391,7 +535,7 @@ function Composer({
             }
           }}
         />
-        <NeonButton size="sm" loading={sending} disabled={!body.trim() || disabled} onClick={submit}>
+        <NeonButton size="sm" loading={busy} disabled={!selected || !body.trim() || disabled || busy} onClick={submit}>
           <Send className="h-4 w-4" />
         </NeonButton>
       </div>
@@ -483,7 +627,6 @@ export function InboxPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [templates, setTemplates] = useState<Template[]>([]);
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [query, setQuery] = useState("");
   const [loadingList, setLoadingList] = useState(true);
@@ -547,13 +690,6 @@ export function InboxPage() {
     const timeout = setTimeout(() => loadConversations(), 180);
     return () => clearTimeout(timeout);
   }, [loadConversations]);
-
-  useEffect(() => {
-    fetch("/api/app/templates")
-      .then((response) => (response.ok ? response.json() : { templates: [] }))
-      .then((data: { templates: Template[] }) => setTemplates(data.templates ?? []))
-      .catch(() => setTemplates([]));
-  }, []);
 
   useEffect(() => {
     const selectedConversationId = selected?.id;
@@ -622,28 +758,6 @@ export function InboxPage() {
     }
   }
 
-  async function sendTemplate(template: Template) {
-    if (!selected) return;
-    try {
-      const data = await postAction(`/api/app/inbox/conversations/${selected.id}/template-reply`, {
-        templateId: template.id,
-        body: template.body
-      });
-      if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
-      if (data.message) setMessages((current) => upsertMessage(current, data.message!));
-      setNotice(`Template ${template.name} queued.`);
-    } catch (templateError) {
-      setError(templateError instanceof Error ? templateError.message : "Template send failed");
-    }
-  }
-
-  async function resolveConversation() {
-    if (!selected) return;
-    const data = await postAction(`/api/app/inbox/conversations/${selected.id}/resolve`);
-    if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
-    setNotice("Conversation marked resolved.");
-  }
-
   async function humanTakeover() {
     if (!selected) return;
     const data = await postAction(`/api/app/inbox/conversations/${selected.id}/human-takeover`, {
@@ -660,6 +774,28 @@ export function InboxPage() {
     if (data.message) setMessages((current) => upsertMessage(current, data.message!));
     if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
     setNotice("Internal note added.");
+  }
+
+  async function sendAttachment(file: File, caption?: string) {
+    if (!selected) return;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      if (caption) formData.append("caption", caption);
+      const response = await fetch(`/api/app/inbox/conversations/${selected.id}/attachments`, {
+        method: "POST",
+        body: formData
+      });
+      const data = (await response.json()) as { conversation?: Conversation; message?: Message; error?: { message?: string } };
+      if (!response.ok) {
+        throw new Error(data.error?.message ?? "Attachment send failed");
+      }
+      if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
+      if (data.message) setMessages((current) => upsertMessage(current, data.message!));
+      setNotice("Attachment queued for WhatsApp delivery.");
+    } catch (attachmentError) {
+      setError(attachmentError instanceof Error ? attachmentError.message : "Attachment send failed");
+    }
   }
 
   return (
@@ -774,12 +910,10 @@ export function InboxPage() {
 
             <Composer
               selected={selected}
-              templates={templates}
               disabled={serviceWindowClosed}
               onSend={sendReply}
-              onTemplate={sendTemplate}
-              onResolve={resolveConversation}
               onHumanTakeover={humanTakeover}
+              onAttachment={sendAttachment}
             />
           </GlassCard>
 

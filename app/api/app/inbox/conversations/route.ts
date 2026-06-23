@@ -17,6 +17,16 @@ const blockedMessageWhere = {
     { failureReason: { contains: "131049" } }
   ]
 } satisfies Prisma.MessageWhereInput;
+const activeHumanQueueWhere = {
+  OR: [
+    { humanTakeover: true },
+    { queueItems: { some: { status: { in: ["OPEN", "ASSIGNED"] } } } }
+  ]
+} satisfies Prisma.ConversationWhereInput;
+const notInHumanQueueWhere = {
+  humanTakeover: false,
+  queueItems: { none: { status: { in: ["OPEN", "ASSIGNED"] } } }
+} satisfies Prisma.ConversationWhereInput;
 
 function parseTake(value: string | null) {
   if (!value) return undefined;
@@ -55,12 +65,10 @@ export async function GET(request: NextRequest) {
       and.push({ assignedUserId: user.id });
     }
     if (filter === "human-queue") {
-      and.push({
-        OR: [
-          { humanTakeover: true },
-          { queueItems: { some: { status: { in: ["OPEN", "ASSIGNED"] } } } }
-        ]
-      });
+      and.push(activeHumanQueueWhere);
+    }
+    if (filter !== "all" && filter !== "human-queue") {
+      and.push(notInHumanQueueWhere);
     }
     if (filter === "orders") {
       and.push({ orders: { some: { status: { in: [...confirmedOrderStatuses] } } } });

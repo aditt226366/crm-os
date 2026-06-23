@@ -10,6 +10,15 @@ type WhatsAppSendResult = {
   error?: string;
 };
 
+type WhatsAppMediaUploadResult = {
+  ok: boolean;
+  status: number;
+  mediaId?: string;
+  error?: string;
+};
+
+export type WhatsAppMediaKind = "image" | "document" | "audio" | "video";
+
 export type WhatsAppTemplateComponentPayload = {
   type: string;
   sub_type?: string;
@@ -100,6 +109,153 @@ async function postWhatsAppMessage(config: IntegrationConfig, payload: Record<st
     status: response.status,
     whatsappMessageId: messageId,
     error: response.ok ? undefined : metaErrorText(data, text || "WhatsApp message failed.")
+  };
+}
+
+export function whatsappMediaKindFromMime(mimeType: string): WhatsAppMediaKind {
+  const normalized = mimeType.toLowerCase();
+  if (normalized.startsWith("image/")) return "image";
+  if (normalized.startsWith("audio/")) return "audio";
+  if (normalized.startsWith("video/")) return "video";
+  return "document";
+}
+
+export function messageTypeFromMime(mimeType: string): "IMAGE" | "DOCUMENT" | "AUDIO" | "VIDEO" {
+  const kind = whatsappMediaKindFromMime(mimeType);
+  if (kind === "image") return "IMAGE";
+  if (kind === "audio") return "AUDIO";
+  if (kind === "video") return "VIDEO";
+  return "DOCUMENT";
+}
+
+export async function uploadWhatsAppMedia({
+  config,
+  file,
+  fileName,
+  mimeType
+}: {
+  config: IntegrationConfig;
+  file: Blob;
+  fileName: string;
+  mimeType: string;
+}): Promise<WhatsAppMediaUploadResult> {
+  const phoneNumberId = config.WHATSAPP_PHONE_NUMBER_ID?.trim();
+  const accessToken = config.WHATSAPP_ACCESS_TOKEN?.trim();
+
+  if (!phoneNumberId || !accessToken) {
+    throw new ApiError(409, "WHATSAPP_CONFIG_MISSING", "WhatsApp Cloud API is not connected for this company.");
+  }
+
+  const formData = new FormData();
+  formData.append("messaging_product", "whatsapp");
+  formData.append("type", mimeType);
+  formData.append("file", file, fileName);
+
+  let response: Response;
+  try {
+    response = await fetch(`https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(phoneNumberId)}/media`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      },
+      body: formData
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: error instanceof Error ? error.message : "WhatsApp media upload failed."
+    };
+  }
+
+  const text = await response.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+  const mediaId = data && typeof data === "object" ? (data as { id?: string }).id : undefined;
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    mediaId,
+    error: response.ok ? undefined : metaErrorText(data, text || "WhatsApp media upload failed.")
+  };
+}
+
+export async function sendWhatsAppMediaMessage({
+  config,
+  to,
+  mediaId,
+  mediaType,
+  caption,
+  fileName
+}: {
+  config: IntegrationConfig;
+  to: string;
+  mediaId: string;
+  mediaType: WhatsAppMediaKind;
+  caption?: string;
+  fileName?: string;
+}) {
+  const mediaPayload = {
+    id: mediaId,
+    ...(caption && mediaType !== "audio" ? { caption } : {}),
+    ...(fileName && mediaType === "document" ? { filename: fileName } : {})
+  };
+
+  return postWhatsAppMessage(config, {
+    recipient_type: "individual",
+    to: toWhatsAppRecipient(to),
+    type: mediaType,
+    [mediaType]: mediaPayload
+  });
+}
+
+export async function downloadWhatsAppMedia({
+  config,
+  mediaId
+}: {
+  config: IntegrationConfig;
+  mediaId: string;
+}) {
+  const accessToken = config.WHATSAPP_ACCESS_TOKEN?.trim();
+  if (!accessToken) {
+    throw new ApiError(409, "WHATSAPP_CONFIG_MISSING", "WhatsApp Cloud API is not connected for this company.");
+  }
+
+  const infoResponse = await fetch(`https://graph.facebook.com/${graphApiVersion()}/${encodeURIComponent(mediaId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const info = (await infoResponse.json().catch(() => null)) as {
+    url?: string;
+    mime_type?: string;
+    file_size?: number;
+    sha256?: string;
+    error?: { message?: string };
+  } | null;
+
+  if (!infoResponse.ok || !info?.url) {
+    throw new ApiError(409, "WHATSAPP_MEDIA_LOOKUP_FAILED", info?.error?.message ?? "WhatsApp media lookup failed.");
+  }
+
+  const mediaResponse = await fetch(info.url, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!mediaResponse.ok) {
+    throw new ApiError(409, "WHATSAPP_MEDIA_DOWNLOAD_FAILED", "WhatsApp media download failed.");
+  }
+
+  const mimeType = mediaResponse.headers.get("content-type") ?? info.mime_type ?? "application/octet-stream";
+  const bytes = Buffer.from(await mediaResponse.arrayBuffer());
+
+  return {
+    bytes,
+    mimeType,
+    size: info.file_size ?? bytes.byteLength,
+    sha256: info.sha256 ?? null
   };
 }
 

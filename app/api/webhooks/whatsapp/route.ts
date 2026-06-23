@@ -8,6 +8,7 @@ import { whatsappWebhookMessageSchema } from "@/lib/validation";
 import { readEncryptedConfig } from "@/lib/integration-vault";
 import { readGoogleSheetLeads, updateGoogleSheetLeadStatuses } from "@/lib/google-sheets-leads";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
+import { downloadWhatsAppMedia, messageTypeFromMime } from "@/lib/whatsapp-cloud";
 import {
   createMetaDeliveryLimit,
   isMetaDeliveryLimitError,
@@ -17,12 +18,28 @@ import {
 } from "@/lib/meta-delivery-limit";
 import { syncConversationWorkflowSignals } from "@/lib/conversation-workflow";
 
+const MAX_DATABASE_MEDIA_BYTES = 16 * 1024 * 1024;
+
+type MetaMedia = {
+  id?: string;
+  mime_type?: string;
+  caption?: string;
+  filename?: string;
+  sha256?: string;
+};
+
 type MetaMessage = {
   id?: string;
   from?: string;
+  type?: string;
   text?: { body?: string };
   button?: { text?: string };
   interactive?: { button_reply?: { title?: string }; list_reply?: { title?: string } };
+  image?: MetaMedia;
+  document?: MetaMedia;
+  audio?: MetaMedia;
+  video?: MetaMedia;
+  sticker?: MetaMedia;
   referral?: { source_id?: string; source_type?: string };
 };
 
@@ -61,8 +78,120 @@ function messageBody(message: MetaMessage) {
     message.button?.text ??
     message.interactive?.button_reply?.title ??
     message.interactive?.list_reply?.title ??
+    message.image?.caption ??
+    message.document?.caption ??
+    message.video?.caption ??
     ""
   );
+}
+
+function fallbackMimeType(kind: string) {
+  if (kind === "image" || kind === "sticker") return kind === "sticker" ? "image/webp" : "image/jpeg";
+  if (kind === "audio") return "audio/ogg";
+  if (kind === "video") return "video/mp4";
+  return "application/octet-stream";
+}
+
+function extensionFromMime(mimeType: string) {
+  const normalized = mimeType.toLowerCase();
+  if (normalized === "application/pdf") return "pdf";
+  if (normalized.includes("jpeg")) return "jpg";
+  if (normalized.includes("png")) return "png";
+  if (normalized.includes("webp")) return "webp";
+  if (normalized.includes("mp4")) return "mp4";
+  if (normalized.includes("mpeg")) return "mp3";
+  if (normalized.includes("ogg")) return "ogg";
+  return normalized.split("/")[1]?.split(";")[0] || "file";
+}
+
+function mediaLabel(kind: string) {
+  if (kind === "image" || kind === "sticker") return "Image";
+  if (kind === "audio") return "Audio";
+  if (kind === "video") return "Video";
+  return "Document";
+}
+
+function mediaFromMessage(message: MetaMessage) {
+  const entries = [
+    ["image", message.image],
+    ["document", message.document],
+    ["audio", message.audio],
+    ["video", message.video],
+    ["sticker", message.sticker]
+  ] as const;
+  const match = entries.find(([, media]) => media?.id);
+  if (!match) return null;
+
+  const [kind, media] = match;
+  const mimeType = media?.mime_type || fallbackMimeType(kind);
+  return {
+    kind,
+    media: media!,
+    mimeType,
+    messageType: messageTypeFromMime(mimeType),
+    label: mediaLabel(kind)
+  };
+}
+
+async function whatsappConfigForTenant(tenantId: string) {
+  const integration = await prisma.integration.findUnique({
+    where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } },
+    select: { encryptedConfig: true, status: true }
+  });
+  if (integration?.status !== "CONNECTED") return null;
+  return readEncryptedConfig(integration.encryptedConfig);
+}
+
+async function inboundMediaMetadata({
+  tenantId,
+  media,
+  kind,
+  mimeType
+}: {
+  tenantId: string;
+  media: MetaMedia;
+  kind: string;
+  mimeType: string;
+}) {
+  const fileName = media.filename || `${mediaLabel(kind).toLowerCase()}-${media.id}.${extensionFromMime(mimeType)}`;
+  const attachment: Record<string, unknown> = {
+    id: media.id,
+    whatsappMediaId: media.id,
+    source: "whatsapp_inbound",
+    mediaKind: kind,
+    fileName,
+    mimeType,
+    sha256: media.sha256 ?? null
+  };
+
+  if (media.id) {
+    try {
+      const config = await whatsappConfigForTenant(tenantId);
+      if (config) {
+        const downloaded = await downloadWhatsAppMedia({ config, mediaId: media.id });
+        attachment.mimeType = downloaded.mimeType;
+        attachment.size = downloaded.size;
+        attachment.sha256 = downloaded.sha256 ?? attachment.sha256;
+        if (downloaded.bytes.byteLength <= MAX_DATABASE_MEDIA_BYTES) {
+          attachment.dataUrl = `data:${downloaded.mimeType};base64,${downloaded.bytes.toString("base64")}`;
+        } else {
+          attachment.storageNote = "Media is larger than the database preview limit.";
+        }
+      }
+    } catch (error) {
+      attachment.downloadError = error instanceof Error ? error.message : "Unable to download WhatsApp media.";
+    }
+  }
+
+  return {
+    attachments: [attachment],
+    whatsappMedia: {
+      id: media.id,
+      kind,
+      mimeType,
+      sha256: media.sha256 ?? null
+    }
+  };
 }
 
 function statusFailureReason(status: MetaStatus) {
@@ -310,16 +439,27 @@ export async function POST(request: NextRequest) {
         }
 
         for (const message of value.messages ?? []) {
-          const body = messageBody(message);
+          const media = mediaFromMessage(message);
+          const body = messageBody(message) || media?.label || "";
           const from = message.from;
-          if (!from || !body) continue;
+          if (!from || (!body && !media)) continue;
           const contact = value.contacts?.find((item) => item.wa_id === from);
+          const mediaMetadata = media
+            ? await inboundMediaMetadata({
+                tenantId,
+                media: media.media,
+                kind: media.kind,
+                mimeType: media.mimeType
+              })
+            : undefined;
           const result = await upsertInboundConversationMessage({
             tenantId,
             phone: from,
             name: contact?.profile?.name,
             body,
             messageId: message.id,
+            type: media?.messageType ?? "TEXT",
+            metadata: mediaMetadata,
             source: message.referral ? "AD" : "ORGANIC",
             sourceId: message.referral?.source_id
           });
