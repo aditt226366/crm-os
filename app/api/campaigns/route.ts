@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     await requireConnectedIntegration(
       user.tenantId!,
       "WHATSAPP_TEMPLATE_SETTINGS",
-      "WhatsApp template settings are not configured for this company."
+      "Template settings are not configured for this company."
     );
     return json({ ok: true, module: "CAMPAIGNS", message: "Campaigns API foundation ready." });
   } catch (error) {

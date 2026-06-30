@@ -20,25 +20,19 @@ const TEMPLATE_CONFIG = {
     nameFields: ["MAIN_TEMPLATE_NAME", "WHATSAPP_TEMPLATE_NAME"],
     languageFields: ["MAIN_TEMPLATE_LANGUAGE", "WHATSAPP_TEMPLATE_LANGUAGE"],
     variableModeField: "MAIN_TEMPLATE_VARIABLE_MODE",
-    variablesField: "MAIN_TEMPLATE_VARIABLES",
-    defaultMode: "NUMBERED",
-    defaultVariables: { "1": "lead.name" }
+    variablesField: "MAIN_TEMPLATE_VARIABLES"
   },
   SCRAP_FOLLOWUP_1: {
     nameFields: ["SCRAP_FOLLOWUP_1_TEMPLATE_NAME", "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME"],
     languageFields: ["SCRAP_FOLLOWUP_1_TEMPLATE_LANGUAGE", "SCRAP_FOLLOW_UP_1_TEMPLATE_LANGUAGE", "WHATSAPP_TEMPLATE_LANGUAGE"],
     variableModeField: "SCRAP_FOLLOWUP_1_VARIABLE_MODE",
-    variablesField: "SCRAP_FOLLOWUP_1_VARIABLES",
-    defaultMode: "NAMED",
-    defaultVariables: { customer_name: "lead.name" }
+    variablesField: "SCRAP_FOLLOWUP_1_VARIABLES"
   },
   SCRAP_FOLLOWUP_2: {
     nameFields: ["SCRAP_FOLLOWUP_2_TEMPLATE_NAME", "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME"],
     languageFields: ["SCRAP_FOLLOWUP_2_TEMPLATE_LANGUAGE", "SCRAP_FOLLOW_UP_2_TEMPLATE_LANGUAGE", "WHATSAPP_TEMPLATE_LANGUAGE"],
     variableModeField: "SCRAP_FOLLOWUP_2_VARIABLE_MODE",
-    variablesField: "SCRAP_FOLLOWUP_2_VARIABLES",
-    defaultMode: "NAMED",
-    defaultVariables: { customer_name: "lead.name" }
+    variablesField: "SCRAP_FOLLOWUP_2_VARIABLES"
   }
 } as const satisfies Record<
   WhatsAppTemplateRole,
@@ -47,8 +41,6 @@ const TEMPLATE_CONFIG = {
     languageFields: readonly string[];
     variableModeField: string;
     variablesField: string;
-    defaultMode: WhatsAppTemplateVariableMode;
-    defaultVariables: Record<string, string>;
   }
 >;
 
@@ -60,18 +52,17 @@ function configValue(config: Record<string, string>, fields: readonly string[]) 
   return null;
 }
 
-export function normalizeTemplateVariableMode(value: string | undefined, fallback: WhatsAppTemplateVariableMode): WhatsAppTemplateVariableMode | null {
+export function normalizeTemplateVariableMode(value: string | undefined): WhatsAppTemplateVariableMode | null {
   const normalized = value?.trim().toUpperCase();
-  if (!normalized) return fallback;
+  if (!normalized) return null;
   if (normalized === "NUMBERED" || normalized === "NAMED") return normalized;
   return null;
 }
 
 export function parseTemplateVariables(
-  raw: string | undefined,
-  fallback: Record<string, string>
+  raw: string | undefined
 ): { ok: true; variables: Record<string, string> } | { ok: false; error: string } {
-  if (!raw?.trim()) return { ok: true, variables: fallback };
+  if (!raw?.trim()) return { ok: false, error: "Variable mapping is required." };
 
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -100,10 +91,10 @@ export function templateVariableConfig(
   const language = configValue(config, definition.languageFields);
   if (!name || !language) return null;
 
-  const variableMode = normalizeTemplateVariableMode(config[definition.variableModeField], definition.defaultMode);
+  const variableMode = normalizeTemplateVariableMode(config[definition.variableModeField]);
   if (!variableMode) return null;
 
-  const parsedVariables = parseTemplateVariables(config[definition.variablesField], definition.defaultVariables);
+  const parsedVariables = parseTemplateVariables(config[definition.variablesField]);
   if (!parsedVariables.ok) return null;
 
   return {

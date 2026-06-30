@@ -119,8 +119,7 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         required: true,
         group: "Main Welcome Template",
         options: ["NUMBERED", "NAMED"],
-        defaultValue: "NUMBERED",
-        helpText: "Printwear welcome template uses NUMBERED variables like {{1}}."
+        helpText: "Choose the variable format used by this company's approved Meta template."
       },
       {
         name: "MAIN_TEMPLATE_VARIABLES",
@@ -128,9 +127,8 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         input: "textarea",
         required: true,
         group: "Main Welcome Template",
-        defaultValue: "{\"1\":\"lead.name\"}",
-        placeholder: "{\"1\":\"lead.name\"}",
-        helpText: "JSON mapping. For Printwear: 1 -> lead.name."
+        placeholder: "{\"variable_key\":\"lead.name\"}",
+        helpText: "JSON mapping from the exact template variable key to a lead field, for example lead.name."
       },
       {
         name: "SCRAP_FOLLOWUP_1_TEMPLATE_NAME",
@@ -157,8 +155,7 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         required: true,
         group: "Scrap Follow-up Day 1",
         options: ["NUMBERED", "NAMED"],
-        defaultValue: "NAMED",
-        helpText: "Printwear Scrap follow-up 1 uses NAMED variables like {{customer_name}}."
+        helpText: "Choose the variable format used by this company's approved Meta template."
       },
       {
         name: "SCRAP_FOLLOWUP_1_VARIABLES",
@@ -166,9 +163,8 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         input: "textarea",
         required: true,
         group: "Scrap Follow-up Day 1",
-        defaultValue: "{\"customer_name\":\"lead.name\"}",
-        placeholder: "{\"customer_name\":\"lead.name\"}",
-        helpText: "JSON mapping. For Printwear: customer_name -> lead.name."
+        placeholder: "{\"variable_key\":\"lead.name\"}",
+        helpText: "JSON mapping from the exact template variable key to a lead field, for example lead.name."
       },
       {
         name: "SCRAP_FOLLOWUP_2_TEMPLATE_NAME",
@@ -195,8 +191,7 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         required: true,
         group: "Scrap Follow-up Day 2",
         options: ["NUMBERED", "NAMED"],
-        defaultValue: "NAMED",
-        helpText: "Printwear Scrap follow-up 2 uses NAMED variables like {{customer_name}}."
+        helpText: "Choose the variable format used by this company's approved Meta template."
       },
       {
         name: "SCRAP_FOLLOWUP_2_VARIABLES",
@@ -204,9 +199,8 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         input: "textarea",
         required: true,
         group: "Scrap Follow-up Day 2",
-        defaultValue: "{\"customer_name\":\"lead.name\"}",
-        placeholder: "{\"customer_name\":\"lead.name\"}",
-        helpText: "JSON mapping. For Printwear: customer_name -> lead.name."
+        placeholder: "{\"variable_key\":\"lead.name\"}",
+        helpText: "JSON mapping from the exact template variable key to a lead field, for example lead.name."
       }
     ]
   },

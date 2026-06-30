@@ -9,7 +9,6 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const leadFlowSchema = z.object({
-  templateId: z.string().trim().min(1).optional().or(z.literal("")),
   range: z.string().trim().min(1).max(80).optional().or(z.literal("")),
   maxRows: z.coerce.number().int().min(1).max(200).default(200)
 });
@@ -32,7 +31,6 @@ export async function POST(request: NextRequest) {
     const result = await runGoogleSheetLeadFlowWithTenantLock({
       tenantId: user.tenantId!,
       userId: user.id,
-      templateId: body.templateId || undefined,
       range: body.range || undefined,
       maxRows: body.maxRows
     });

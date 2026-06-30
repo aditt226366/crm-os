@@ -1,4 +1,4 @@
-import { Prisma, type IntegrationType, type WhatsAppTemplate } from "@prisma/client";
+import { Prisma, type IntegrationType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { safeCreateAuditLog } from "@/lib/audit";
@@ -15,14 +15,13 @@ import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
 import { recordUsage } from "@/lib/usage";
 import { emitTenantEvent } from "@/lib/realtime";
-import {
-  fetchWhatsAppTemplateDetails,
-  renderTemplateBody,
-  resolveWhatsAppTemplateVariables,
-  sendWhatsAppTemplateMessage,
-  type WhatsAppTemplateLead
-} from "@/lib/whatsapp-cloud";
+import { type WhatsAppTemplateLead } from "@/lib/whatsapp-cloud";
 import { templateVariableConfig } from "@/lib/whatsapp-template-config";
+import {
+  loadTenantTemplateMessageConfig,
+  sendTemplateMessage,
+  TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE
+} from "@/lib/tenant-template-messaging";
 import {
   activeMetaDeliveryLimit,
   activeMetaDeliveryLimitFromMessage,
@@ -102,57 +101,6 @@ function configuredTemplate(config: IntegrationConfig): LeadTemplate | null {
     body: `Approved WhatsApp template: ${templateConfig.name}`,
     components: null
   };
-}
-
-function templateFromRecord(template: WhatsAppTemplate): LeadTemplate {
-  return {
-    id: template.id,
-    name: template.name,
-    language: template.language,
-    status: template.status,
-    body: template.body,
-    components: template.components
-  };
-}
-
-async function resolveTemplate({
-  tenantId,
-  templateId,
-  templateSettingsConfig
-}: {
-  tenantId: string;
-  templateId?: string;
-  templateSettingsConfig: IntegrationConfig;
-}) {
-  if (templateId) {
-    const template = await prisma.whatsAppTemplate.findFirst({
-      where: { tenantId, id: templateId, status: "APPROVED" }
-    });
-    if (!template) {
-      throw new ApiError(404, "TEMPLATE_NOT_FOUND", "Approved template not found for this company.");
-    }
-    return templateFromRecord(template);
-  }
-
-  const configured = configuredTemplate(templateSettingsConfig);
-  const template = configured
-    ? await prisma.whatsAppTemplate.findFirst({
-        where: {
-          tenantId,
-          name: configured.name,
-          language: configured.language,
-          status: "APPROVED"
-        }
-      })
-    : await prisma.whatsAppTemplate.findFirst({
-        where: { tenantId, status: "APPROVED" },
-        orderBy: { updatedAt: "desc" }
-      });
-
-  if (template) return templateFromRecord(template);
-  if (configured) return configured;
-
-  throw new ApiError(404, "TEMPLATE_NOT_FOUND", "Approved template not found for this company.");
 }
 
 async function safeRecordUsage(input: {
@@ -325,61 +273,6 @@ async function syncConfiguredApprovedTemplate(tenantId: string) {
     },
     update: {
       status: "APPROVED"
-    }
-  });
-}
-
-async function syncConfiguredTemplateFromMeta({
-  tenantId,
-  templateSettingsConfig,
-  whatsappConfig
-}: {
-  tenantId: string;
-  templateSettingsConfig: IntegrationConfig;
-  whatsappConfig: IntegrationConfig;
-}) {
-  const configured = configuredTemplate(templateSettingsConfig);
-  if (!configured) {
-    return null;
-  }
-
-  const details = await fetchWhatsAppTemplateDetails({
-    config: whatsappConfig,
-    templateName: configured.name,
-    language: configured.language
-  }).catch((error) => {
-    console.error("[lead-flow.template] Meta sync failed", error instanceof Error ? error.message : String(error));
-    return null;
-  });
-
-  if (!details) {
-    return null;
-  }
-
-  return prisma.whatsAppTemplate.upsert({
-    where: {
-      tenantId_name_language: {
-        tenantId,
-        name: details.name,
-        language: details.language
-      }
-    },
-    create: {
-      tenantId,
-      metaTemplateId: details.metaTemplateId,
-      name: details.name,
-      language: details.language,
-      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
-      status: details.status === "APPROVED" ? "APPROVED" : "PENDING",
-      body: details.body,
-      components: details.components as Prisma.InputJsonValue
-    },
-    update: {
-      metaTemplateId: details.metaTemplateId,
-      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
-      status: details.status === "APPROVED" ? "APPROVED" : "PENDING",
-      body: details.body,
-      components: details.components as Prisma.InputJsonValue
     }
   });
 }
@@ -595,13 +488,11 @@ async function alreadySentTemplate({
 export async function runGoogleSheetLeadFlow({
   tenantId,
   userId,
-  templateId,
   range,
   maxRows
 }: {
   tenantId: string;
   userId: string;
-  templateId?: string;
   range?: string;
   maxRows?: number;
 }) {
@@ -612,25 +503,24 @@ export async function runGoogleSheetLeadFlow({
     "GOOGLE_SHEETS",
     "Google Sheets is not connected for this company."
   );
-  const whatsappConfig = assertConnected(
+  assertConnected(
     integrations,
     "WHATSAPP_CLOUD",
     "WhatsApp Cloud API is not connected for this company."
   );
-  const templateSettingsConfig = assertConnected(
+  assertConnected(
     integrations,
     "WHATSAPP_TEMPLATE_SETTINGS",
-    "WhatsApp template settings are not configured for this company."
+    TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE
   );
-  const mainTemplateConfig = templateVariableConfig(templateSettingsConfig, "MAIN");
-  if (!mainTemplateConfig) {
-    throw new ApiError(409, "TEMPLATE_CONFIG_MISSING", "Main WhatsApp template variable mapping is not configured.");
-  }
   assertConnected(integrations, "KNOWLEDGE_BASE", "Knowledge base is not connected for this company.");
   assertConnected(integrations, "AI_MODEL", "AI model is not connected for this company.");
-  await syncConfiguredTemplateFromMeta({ tenantId, templateSettingsConfig, whatsappConfig });
 
-  const template = await resolveTemplate({ tenantId, templateId, templateSettingsConfig });
+  const mainTemplateMessageConfig = await loadTenantTemplateMessageConfig({
+    tenantId,
+    templatePurpose: "MAIN"
+  });
+  const template = mainTemplateMessageConfig.template;
   const sheetRange = range || "A:Z";
   await ensureGoogleSheetStatusColumn({
     config: sheetsConfig,
@@ -717,28 +607,23 @@ export async function runGoogleSheetLeadFlow({
     }
 
     const leadInput = leadTemplateInput(sheetLead);
-    const variables = resolveWhatsAppTemplateVariables({
-      variables: mainTemplateConfig.variables,
-      lead: leadInput
-    });
     if (attemptedSends > 0 && sendGapMs > 0) {
       await wait(sendGapMs);
     }
     attemptedSends += 1;
-    const sendResult = await sendWhatsAppTemplateMessage({
-      config: whatsappConfig,
+    const templateMessage = await sendTemplateMessage({
+      tenantId,
+      templatePurpose: "MAIN",
       to: contact.phone,
-      templateName: template.name,
-      language: template.language,
-      variableMode: mainTemplateConfig.variableMode,
-      variableMappings: mainTemplateConfig.variables,
-      lead: leadInput
+      lead: leadInput,
+      config: mainTemplateMessageConfig
     });
+    const { sendResult, templateConfig, variables } = templateMessage;
     const immediateDeliveryLimit =
       !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
         ? createMetaDeliveryLimit({ reason: sendResult.error })
         : null;
-    const preview = renderTemplateBody(template.body, variables);
+    const preview = templateMessage.body;
     const messageMetadata = {
       sentByUserId: userId,
       adapter: "lead-google-sheets-flow",
@@ -748,8 +633,8 @@ export async function runGoogleSheetLeadFlow({
       sheetStatusColumnIndex: sheetLead.statusColumnIndex,
       sheetRange,
       leadSendGapMs: sendGapMs,
-      variableMode: mainTemplateConfig.variableMode,
-      variableMappings: mainTemplateConfig.variables,
+      variableMode: templateConfig.variableMode,
+      variableMappings: templateConfig.variables,
       variables
     };
     const outbound = await createOutboundConversationMessage({

@@ -269,7 +269,7 @@ function safeLeadName(lead?: WhatsAppTemplateLead) {
 
 function variableValueFromPath(path: string, lead?: WhatsAppTemplateLead) {
   const normalized = path.trim().toLowerCase();
-  if (normalized === "lead.name" || normalized === "contact.name" || normalized === "name" || normalized === "customer_name") {
+  if (normalized === "lead.name" || normalized === "contact.name" || normalized === "name") {
     return safeLeadName(lead);
   }
   if (normalized === "lead.phone" || normalized === "contact.phone" || normalized === "phone") {

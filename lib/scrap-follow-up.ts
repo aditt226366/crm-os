@@ -1,6 +1,5 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
 import { createOutboundConversationMessage, serializeConversation, serializeMessage } from "@/lib/inbox";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { emitTenantEvent } from "@/lib/realtime";
@@ -14,14 +13,14 @@ import {
   withContactMetaDeliveryLimit,
   withMetaDeliveryLimitMetadata
 } from "@/lib/meta-delivery-limit";
+import { type WhatsAppTemplateLead } from "@/lib/whatsapp-cloud";
+import { type WhatsAppTemplateRole } from "@/lib/whatsapp-template-config";
 import {
-  fetchWhatsAppTemplateDetails,
-  renderTemplateBody,
-  resolveWhatsAppTemplateVariables,
-  sendWhatsAppTemplateMessage,
-  type WhatsAppTemplateLead
-} from "@/lib/whatsapp-cloud";
-import { templateVariableConfig, type TemplateVariableConfig, type WhatsAppTemplateRole } from "@/lib/whatsapp-template-config";
+  loadTenantTemplateMessageConfig,
+  sendTemplateMessage,
+  TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE,
+  type TenantTemplateMessageConfig
+} from "@/lib/tenant-template-messaging";
 import {
   asRecord,
   readScrapFollowUpState,
@@ -146,72 +145,6 @@ function conversationTemplateInput(conversation: ConversationForFollowUp): Whats
   };
 }
 
-async function syncFollowUpTemplateFromMeta({
-  tenantId,
-  templateName,
-  language
-}: {
-  tenantId: string;
-  templateName: string;
-  language: string;
-}) {
-  const details = await fetchWhatsAppTemplateDetails({
-    config: await whatsappConfig(tenantId),
-    templateName,
-    language
-  }).catch((error) => {
-    console.error("[scrap-follow-up.template] Meta sync failed", error instanceof Error ? error.message : String(error));
-    return null;
-  });
-
-  if (!details || details.status !== "APPROVED") {
-    return null;
-  }
-
-  return prisma.whatsAppTemplate.upsert({
-    where: {
-      tenantId_name_language: {
-        tenantId,
-        name: details.name,
-        language: details.language
-      }
-    },
-    create: {
-      tenantId,
-      metaTemplateId: details.metaTemplateId,
-      name: details.name,
-      language: details.language,
-      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
-      status: "APPROVED",
-      body: details.body,
-      components: details.components as Prisma.InputJsonValue
-    },
-    update: {
-      metaTemplateId: details.metaTemplateId,
-      category: details.category === "UTILITY" || details.category === "AUTHENTICATION" ? details.category : "MARKETING",
-      status: "APPROVED",
-      body: details.body,
-      components: details.components as Prisma.InputJsonValue
-    }
-  });
-}
-
-async function resolveFollowUpTemplate(
-  tenantId: string,
-  templateConfig: TemplateVariableConfig
-) {
-  const template = await prisma.whatsAppTemplate.findFirst({
-    where: {
-      tenantId,
-      name: templateConfig.name,
-      language: templateConfig.language,
-      status: "APPROVED"
-    },
-    orderBy: { updatedAt: "desc" }
-  });
-  return template ?? syncFollowUpTemplateFromMeta({ tenantId, templateName: templateConfig.name, language: templateConfig.language });
-}
-
 async function updateContactScrapState({
   contactId,
   customFields,
@@ -296,35 +229,28 @@ async function sendFollowUp({
   userId,
   conversation,
   step,
-  template,
-  templateConfig
+  templateMessageConfig
 }: {
   tenantId: string;
   userId: string;
   conversation: ConversationForFollowUp;
   step: FollowUpStep;
-  template: NonNullable<Awaited<ReturnType<typeof resolveFollowUpTemplate>>>;
-  templateConfig: TemplateVariableConfig;
+  templateMessageConfig: TenantTemplateMessageConfig;
 }) {
   const lead = conversationTemplateInput(conversation);
-  const variables = resolveWhatsAppTemplateVariables({
-    variables: templateConfig.variables,
-    lead
-  });
-  const sendResult = await sendWhatsAppTemplateMessage({
-    config: await whatsappConfig(tenantId),
+  const templateMessage = await sendTemplateMessage({
+    tenantId,
+    templatePurpose: FOLLOW_UPS[step].role,
     to: conversation.contact.phone,
-    templateName: template.name,
-    language: template.language,
-    variableMode: templateConfig.variableMode,
-    variableMappings: templateConfig.variables,
-    lead
+    lead,
+    config: templateMessageConfig
   });
+  const { sendResult, template, templateConfig, variables } = templateMessage;
   const deliveryLimit =
     !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
       ? createMetaDeliveryLimit({ reason: sendResult.error })
       : null;
-  const body = renderTemplateBody(template.body, variables);
+  const body = templateMessage.body;
   const metadata = {
     adapter: SCRAP_FOLLOW_UP_ADAPTER,
     sentByUserId: userId,
@@ -340,7 +266,7 @@ async function sendFollowUp({
     tenantId,
     conversationId: conversation.id,
     type: "TEMPLATE",
-    templateId: template.id,
+    templateId: template.id ?? undefined,
     body,
     whatsappMessageId: sendResult.whatsappMessageId,
     status: sendResult.ok ? "PENDING" : "FAILED",
@@ -394,25 +320,6 @@ async function sendFollowUp({
     deliveryLimit,
     error: sendResult.error ?? null
   };
-}
-
-async function whatsappConfig(tenantId: string): Promise<IntegrationConfig> {
-  const integration = await prisma.integration.findUnique({
-    where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } },
-    select: { status: true, encryptedConfig: true }
-  });
-  if (integration?.status !== "CONNECTED") {
-    throw new Error("WhatsApp Cloud API is not connected.");
-  }
-  return readEncryptedConfig(integration.encryptedConfig);
-}
-
-async function verifiedTemplateSettingsConfig(tenantId: string) {
-  const integration = await prisma.integration.findUnique({
-    where: { tenantId_type: { tenantId, type: "WHATSAPP_TEMPLATE_SETTINGS" } },
-    select: { status: true, encryptedConfig: true }
-  });
-  return integration?.status === "CONNECTED" ? readEncryptedConfig(integration.encryptedConfig) : null;
 }
 
 async function dueStep(conversation: ConversationForFollowUp, now: Date): Promise<{ step: FollowUpStep } | { skip: string; dormant?: boolean }> {
@@ -483,18 +390,6 @@ export async function runDueScrapFollowUps({
   await ensureLeadWorkspaceSchema();
   const now = new Date();
   const sendGapMs = configuredSendGapMs();
-  const templateSettingsConfig = await verifiedTemplateSettingsConfig(tenantId);
-  if (!templateSettingsConfig) {
-    return {
-      scanned: 0,
-      sent: 0,
-      failed: 0,
-      skipped: 0,
-      dormant: 0,
-      templateMissing: 0,
-      results: []
-    };
-  }
   const conversations = await prisma.conversation.findMany({
     where: {
       tenantId,
@@ -515,8 +410,8 @@ export async function runDueScrapFollowUps({
     take: Math.min(Math.max(maxConversations * 4, 20), 500)
   });
   const results: ScrapFollowUpRunResult["results"] = [];
-  const templateCache = new Map<FollowUpStep, Awaited<ReturnType<typeof resolveFollowUpTemplate>>>();
-  const templateConfigCache = new Map<FollowUpStep, TemplateVariableConfig | null>();
+  const templateMessageConfigCache = new Map<FollowUpStep, TenantTemplateMessageConfig | null>();
+  const templateMessageConfigErrors = new Map<FollowUpStep, string>();
   let attemptedSends = 0;
 
   for (const conversation of conversations) {
@@ -536,34 +431,32 @@ export async function runDueScrapFollowUps({
       continue;
     }
 
-    if (!templateConfigCache.has(due.step)) {
-      templateConfigCache.set(due.step, templateVariableConfig(templateSettingsConfig, FOLLOW_UPS[due.step].role));
+    if (!templateMessageConfigCache.has(due.step)) {
+      try {
+        templateMessageConfigCache.set(
+          due.step,
+          await loadTenantTemplateMessageConfig({
+            tenantId,
+            templatePurpose: FOLLOW_UPS[due.step].role
+          })
+        );
+      } catch (error) {
+        templateMessageConfigCache.set(due.step, null);
+        templateMessageConfigErrors.set(
+          due.step,
+          error instanceof Error ? error.message : TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE
+        );
+      }
     }
-    const templateConfig = templateConfigCache.get(due.step);
-    if (!templateConfig) {
+    const templateMessageConfig = templateMessageConfigCache.get(due.step);
+    if (!templateMessageConfig) {
       results.push({
         conversationId: conversation.id,
         contactId: conversation.contactId,
         phone: conversation.contact.phone,
         status: "skipped",
         step: due.step,
-        reason: `Scrap follow-up ${due.step} variable mapping is not configured.`
-      });
-      continue;
-    }
-
-    if (!templateCache.has(due.step)) {
-      templateCache.set(due.step, await resolveFollowUpTemplate(tenantId, templateConfig));
-    }
-    const template = templateCache.get(due.step);
-    if (!template) {
-      results.push({
-        conversationId: conversation.id,
-        contactId: conversation.contactId,
-        phone: conversation.contact.phone,
-        status: "skipped",
-        step: due.step,
-        reason: `Approved Scrap follow-up ${due.step} template is not configured.`
+        reason: templateMessageConfigErrors.get(due.step) ?? TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE
       });
       continue;
     }
@@ -573,7 +466,7 @@ export async function runDueScrapFollowUps({
     }
     attemptedSends += 1;
 
-    const sendResult = await sendFollowUp({ tenantId, userId, conversation, step: due.step, template, templateConfig });
+    const sendResult = await sendFollowUp({ tenantId, userId, conversation, step: due.step, templateMessageConfig });
     results.push({
       conversationId: conversation.id,
       contactId: conversation.contactId,
@@ -590,7 +483,11 @@ export async function runDueScrapFollowUps({
     failed: results.filter((result) => result.status === "failed").length,
     skipped: results.filter((result) => result.status === "skipped").length,
     dormant: results.filter((result) => result.status === "dormant").length,
-    templateMissing: results.filter((result) => result.reason?.includes("template is not configured")).length,
+    templateMissing: results.filter(
+      (result) =>
+        result.reason === TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE ||
+        Boolean(result.reason?.includes("template is not configured"))
+    ).length,
     results
   };
 }

@@ -257,7 +257,7 @@ function missingRequiredTemplateConfig(config: IntegrationConfig, role: WhatsApp
   if (missingOrEmpty(config, definition.variableModeField)) return `${definition.variableModeField} wrong`;
   if (missingOrEmpty(config, definition.variablesField)) return `${definition.variablesField} wrong`;
 
-  const parsedVariables = parseTemplateVariables(config[definition.variablesField], definition.defaultVariables);
+  const parsedVariables = parseTemplateVariables(config[definition.variablesField]);
   if (!parsedVariables.ok) return `${definition.variablesField} wrong`;
   if (!templateVariableConfig(config, role)) return `${definition.variableModeField} wrong`;
   return null;

@@ -130,7 +130,6 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [leadQuery, setLeadQuery] = useState(initialSearch);
-  const [templateId, setTemplateId] = useState("");
   const [range, setRange] = useState("A:Z");
   const [maxRows, setMaxRows] = useState(200);
   const flowRunningRef = useRef(false);
@@ -170,7 +169,6 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
   }, []);
 
   const ready = useMemo(() => data?.integrations.every((integration) => integration.ready) ?? false, [data]);
-  const selectedTemplate = data?.templates.find((template) => template.id === templateId) ?? data?.templates[0] ?? null;
   const filteredLeads = useMemo(() => {
     const leads = data?.leads ?? [];
     const needle = leadQuery.trim().toLowerCase();
@@ -202,7 +200,6 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          templateId: templateId || undefined,
           range,
           maxRows
         })
@@ -220,7 +217,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
       else setRunning(false);
       flowRunningRef.current = false;
     }
-  }, [maxRows, range, templateId]);
+  }, [maxRows, range]);
 
   async function run(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -324,22 +321,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                   </div>
                   <Send className="h-5 w-5 text-cyan-100" />
                 </div>
-                <form onSubmit={run} className="mt-5 grid gap-3 md:grid-cols-[1fr_0.55fr_0.45fr]">
-                  <label className="space-y-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Template</span>
-                    <select
-                      value={templateId}
-                      onChange={(event) => setTemplateId(event.target.value)}
-                      className="h-11 w-full rounded-2xl border border-white/10 bg-slate-950 px-3 text-sm text-white outline-none"
-                    >
-                      <option value="">Configured default</option>
-                      {data.templates.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.name} - {template.language}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                <form onSubmit={run} className="mt-5 grid gap-3 md:grid-cols-[0.55fr_0.45fr]">
                   <label className="space-y-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Range</span>
                     <input
@@ -359,10 +341,10 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                       className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none"
                     />
                   </label>
-                  <div className="md:col-span-3 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="md:col-span-2 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-white">{selectedTemplate?.name ?? "Configured default template"}</p>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{selectedTemplate?.body ?? "Template settings integration will supply the approved template."}</p>
+                      <p className="truncate text-sm font-semibold text-white">Configured welcome template</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">Template settings integration supplies this company&apos;s main approved template.</p>
                     </div>
                     <NeonButton loading={running} disabled={!ready} className="shrink-0">
                       <Play className="h-4 w-4" />

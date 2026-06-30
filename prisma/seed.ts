@@ -86,8 +86,18 @@ async function seedIntegrations(tenantId: string, adminId: string, connected: In
           WHATSAPP_VERIFY_TOKEN: `verify_${suffix}`
         },
         WHATSAPP_TEMPLATE_SETTINGS: {
-          WHATSAPP_TEMPLATE_NAME: "welcome_offer",
-          WHATSAPP_TEMPLATE_LANGUAGE: "en_US"
+          MAIN_TEMPLATE_NAME: "welcome_offer",
+          MAIN_TEMPLATE_LANGUAGE: "en",
+          MAIN_TEMPLATE_VARIABLE_MODE: "NUMBERED",
+          MAIN_TEMPLATE_VARIABLES: "{\"1\":\"lead.name\"}",
+          SCRAP_FOLLOWUP_1_TEMPLATE_NAME: "scrap_follow_up_1",
+          SCRAP_FOLLOWUP_1_TEMPLATE_LANGUAGE: "en",
+          SCRAP_FOLLOWUP_1_VARIABLE_MODE: "NAMED",
+          SCRAP_FOLLOWUP_1_VARIABLES: "{\"name\":\"lead.name\"}",
+          SCRAP_FOLLOWUP_2_TEMPLATE_NAME: "scrap_follow_up_2",
+          SCRAP_FOLLOWUP_2_TEMPLATE_LANGUAGE: "en",
+          SCRAP_FOLLOWUP_2_VARIABLE_MODE: "NAMED",
+          SCRAP_FOLLOWUP_2_VARIABLES: "{\"name\":\"lead.name\"}"
         },
         META_ADS: {
           META_ADS_ACCESS_TOKEN: token,
