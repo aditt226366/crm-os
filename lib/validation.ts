@@ -8,6 +8,32 @@ import {
   type IntegrationType
 } from "@/lib/constants";
 import { normalizeIntegrationType } from "@/lib/integrations/types";
+import {
+  COMPANY_LOGIN_PASSWORD_MAX_LENGTH,
+  COMPANY_LOGIN_PASSWORD_MAX_MESSAGE,
+  COMPANY_LOGIN_PASSWORD_MESSAGE,
+  COMPANY_LOGIN_USERNAME_MESSAGE,
+  COMPANY_LOGIN_USERNAME_PATTERN,
+  isCompanyLoginPasswordValid
+} from "@/lib/credential-policy";
+
+const companySlugSchema = z
+  .string()
+  .min(2, "Company slug must be at least 2 characters.")
+  .max(80, "Company slug must be 80 characters or fewer.")
+  .regex(/^[a-z0-9-]+$/, "Company slug can use lowercase letters, numbers, and hyphens only.");
+
+const loginUsernameSchema = z
+  .string()
+  .min(1, "Login Username is required")
+  .max(120, "Login Username must be 120 characters or fewer.")
+  .regex(COMPANY_LOGIN_USERNAME_PATTERN, COMPANY_LOGIN_USERNAME_MESSAGE);
+
+const optionalCompanyPasswordSchema = z
+  .string()
+  .max(COMPANY_LOGIN_PASSWORD_MAX_LENGTH, COMPANY_LOGIN_PASSWORD_MAX_MESSAGE)
+  .refine((value) => value === "" || isCompanyLoginPasswordValid(value), COMPANY_LOGIN_PASSWORD_MESSAGE)
+  .optional();
 
 export const loginSchema = z
   .object({
@@ -34,22 +60,12 @@ export const loginSchema = z
 export const companyCreateSchema = z
   .object({
     companyName: z.string().min(2).max(120),
-    slug: z.string().min(2).max(80).regex(/^[a-z0-9-]+$/),
+    slug: companySlugSchema,
     ownerName: z.string().min(2).max(120).optional(),
-    loginUsername: z
-      .string()
-      .min(1)
-      .max(120)
-      .regex(/^[a-zA-Z0-9._@-]+$/, "Use letters, numbers, dots, dashes, underscores, or @")
-      .optional(),
+    loginUsername: loginUsernameSchema.optional(),
     adminName: z.string().min(2).max(120).optional(),
-    adminEmail: z
-      .string()
-      .min(1)
-      .max(120)
-      .regex(/^[a-zA-Z0-9._@-]+$/, "Use letters, numbers, dots, dashes, underscores, or @")
-      .optional(),
-    temporaryPassword: z.string().min(1).max(120).optional().or(z.literal("")),
+    adminEmail: loginUsernameSchema.optional(),
+    temporaryPassword: optionalCompanyPasswordSchema,
     phoneNumber: z.string().max(40).optional().or(z.literal("")),
     plan: z.enum(PLANS),
     status: z.enum(TENANT_STATUSES)
@@ -83,7 +99,7 @@ export const companyCreateSchema = z
 
 export const companyPatchSchema = z.object({
   name: z.string().min(2).max(120).optional(),
-  slug: z.string().min(2).max(80).regex(/^[a-z0-9-]+$/).optional(),
+  slug: companySlugSchema.optional(),
   plan: z.enum(PLANS).optional(),
   status: z.enum(TENANT_STATUSES).optional()
 });

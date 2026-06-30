@@ -3,6 +3,14 @@
 import { FormEvent, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { NeonButton } from "@/components/shared/NeonButton";
+import {
+  COMPANY_LOGIN_PASSWORD_MAX_LENGTH,
+  COMPANY_LOGIN_PASSWORD_MAX_MESSAGE,
+  COMPANY_LOGIN_PASSWORD_MESSAGE,
+  COMPANY_LOGIN_USERNAME_MESSAGE,
+  isCompanyLoginPasswordValid,
+  isCompanyLoginUsernameValid
+} from "@/lib/credential-policy";
 
 type SuccessPayload = {
   company: { id: string; name: string; slug: string };
@@ -22,6 +30,56 @@ type ErrorPayload = {
 
 function errorMessage(data: ErrorPayload) {
   return data.error?.issues?.[0]?.message ?? data.error?.message ?? data.message ?? "Could not create company";
+}
+
+const companySlugPattern = /^[a-z0-9-]+$/;
+const companySlugMessage = "Company slug can use lowercase letters, numbers, and hyphens only.";
+
+function formString(payload: Record<string, FormDataEntryValue>, name: string) {
+  const value = payload[name];
+  return typeof value === "string" ? value : "";
+}
+
+function validateCreateCompanyPayload(payload: Record<string, FormDataEntryValue>) {
+  const companyName = formString(payload, "companyName");
+  const slug = formString(payload, "slug");
+  const ownerName = formString(payload, "ownerName");
+  const loginUsername = formString(payload, "loginUsername");
+  const temporaryPassword = formString(payload, "temporaryPassword");
+
+  if (!companyName.trim()) {
+    return "Company Name is required.";
+  }
+
+  if (!slug.trim()) {
+    return "Company Slug is required.";
+  }
+
+  if (!companySlugPattern.test(slug)) {
+    return companySlugMessage;
+  }
+
+  if (!ownerName.trim()) {
+    return "Owner Name is required.";
+  }
+
+  if (!loginUsername.trim()) {
+    return "Login Username is required";
+  }
+
+  if (!isCompanyLoginUsernameValid(loginUsername)) {
+    return COMPANY_LOGIN_USERNAME_MESSAGE;
+  }
+
+  if (temporaryPassword.length > COMPANY_LOGIN_PASSWORD_MAX_LENGTH) {
+    return COMPANY_LOGIN_PASSWORD_MAX_MESSAGE;
+  }
+
+  if (temporaryPassword.length > 0 && !isCompanyLoginPasswordValid(temporaryPassword)) {
+    return COMPANY_LOGIN_PASSWORD_MESSAGE;
+  }
+
+  return null;
 }
 
 export function CreateCompanyModal({
@@ -44,6 +102,12 @@ export function CreateCompanyModal({
     try {
       const form = new FormData(event.currentTarget);
       const payload = Object.fromEntries(form.entries());
+      const validationError = validateCreateCompanyPayload(payload);
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+
       const response = await fetch("/api/admin/companies", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -96,7 +160,7 @@ export function CreateCompanyModal({
                   </div>
                 </div>
               ) : (
-                <form onSubmit={submit} className="mt-6 grid gap-3 sm:grid-cols-2">
+                <form onSubmit={submit} noValidate className="mt-6 grid gap-3 sm:grid-cols-2">
                   {[
                     ["companyName", "Company Name"],
                     ["slug", "Company Slug"],
@@ -112,6 +176,18 @@ export function CreateCompanyModal({
                       type={name === "temporaryPassword" ? "password" : "text"}
                       required={name !== "phoneNumber" && name !== "temporaryPassword"}
                       autoComplete={name === "temporaryPassword" ? "new-password" : "off"}
+                      pattern={name === "slug" ? "[a-z0-9-]+" : name === "loginUsername" ? "[A-Za-z0-9._-]+" : undefined}
+                      minLength={name === "temporaryPassword" ? 8 : undefined}
+                      maxLength={name === "temporaryPassword" ? COMPANY_LOGIN_PASSWORD_MAX_LENGTH : undefined}
+                      title={
+                        name === "slug"
+                          ? companySlugMessage
+                          : name === "loginUsername"
+                            ? COMPANY_LOGIN_USERNAME_MESSAGE
+                            : name === "temporaryPassword"
+                              ? COMPANY_LOGIN_PASSWORD_MESSAGE
+                              : undefined
+                      }
                       className="h-12 rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm text-white outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
                     />
                   ))}
