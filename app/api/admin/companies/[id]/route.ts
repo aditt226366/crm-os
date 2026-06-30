@@ -5,6 +5,7 @@ import { errorResponse, json } from "@/lib/api";
 import { companyPatchSchema } from "@/lib/validation";
 import { writeAuditLog } from "@/lib/audit";
 import { serializeFeature, serializeIntegration } from "@/lib/serializers";
+import { MANAGED_FEATURE_KEYS, managedFeatureOrder } from "@/lib/constants";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -29,13 +30,17 @@ export async function GET(request: NextRequest, context: Context) {
             updatedAt: true
           }
         },
-        features: { include: { updatedBy: true } },
+        features: {
+          where: { featureKey: { in: [...MANAGED_FEATURE_KEYS] } },
+          include: { updatedBy: true }
+        },
         integrations: true
       }
     });
     if (!company) {
       return json({ company: null }, { status: 404 });
     }
+    company.features.sort((a, b) => managedFeatureOrder(a.featureKey) - managedFeatureOrder(b.featureKey));
     return json({
       company: {
         id: company.id,

@@ -3,6 +3,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError, json } from "@/lib/api";
 import { authCookieNames, verifyAccessToken } from "@/lib/auth";
+import { MANAGED_FEATURE_KEYS, getEnabledNavigation, managedFeatureOrder, type Plan } from "@/lib/constants";
+import { serializeFeature } from "@/lib/serializers";
+import { ensureTenantFeatureRows } from "@/lib/tenant-feature-schema";
 
 type WorkspaceTenant = {
   id: string;
@@ -92,6 +95,21 @@ function workspacePayload(user: WorkspaceUser, tenant: WorkspaceTenant, warning?
       }
     },
     tenant
+  };
+}
+
+async function workspaceFeaturePayload(tenantId: string, plan: string, updatedById: string) {
+  await ensureTenantFeatureRows(tenantId, plan as Plan, updatedById);
+  const features = await prisma.tenantFeature.findMany({
+    where: { tenantId, featureKey: { in: [...MANAGED_FEATURE_KEYS] } },
+    include: { updatedBy: true },
+    orderBy: { featureKey: "asc" }
+  });
+  features.sort((a, b) => managedFeatureOrder(a.featureKey) - managedFeatureOrder(b.featureKey));
+
+  return {
+    features: features.map(serializeFeature),
+    navigation: getEnabledNavigation(features)
   };
 }
 
@@ -198,7 +216,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return json(workspacePayload(user, tenant, workspaceWarning));
+    return json({
+      ...workspacePayload(user, tenant, workspaceWarning),
+      ...(await workspaceFeaturePayload(user.tenantId, tenant.plan, user.id))
+    });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       logWorkspaceError(error);

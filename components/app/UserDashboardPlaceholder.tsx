@@ -24,6 +24,7 @@ type AppMe = {
     role: string;
     tenant: { name: string; slug: string; plan: string; status: string } | null;
   };
+  features?: AppFeature[];
 };
 
 export function UserDashboardPlaceholder() {
@@ -33,16 +34,12 @@ export function UserDashboardPlaceholder() {
   const enabledNavigation = getEnabledNavigation(features);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/app/me", { credentials: "include", cache: "no-store" }),
-      fetch("/api/app/features", { credentials: "include", cache: "no-store" })
-    ])
-      .then(async ([meResponse, featureResponse]) => {
-        if (!meResponse.ok || !featureResponse.ok) throw new Error("Workspace access blocked");
+    fetch("/api/app/me", { credentials: "include", cache: "no-store" })
+      .then(async (meResponse) => {
+        if (!meResponse.ok) throw new Error("Workspace access blocked");
         const meData = (await meResponse.json()) as AppMe;
-        const featureData = (await featureResponse.json()) as { features: AppFeature[] };
         setMe(meData.user);
-        setFeatures(featureData.features ?? []);
+        setFeatures(meData.features ?? []);
       })
       .finally(() => setLoading(false));
   }, []);

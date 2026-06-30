@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { FEATURE_KEYS, defaultEnabledFeatures, type Plan } from "@/lib/constants";
+import { FEATURE_KEYS, MANAGED_FEATURE_KEYS, defaultEnabledFeatures, type Plan } from "@/lib/constants";
 
 type ExistsRow = {
   exists: boolean;
@@ -138,16 +138,25 @@ export async function ensureTenantFeatureRows(tenantId: string, plan: Plan, upda
   await ensureTenantFeatureSchema();
 
   const enabled = defaultEnabledFeatures(plan);
-  for (const featureKey of FEATURE_KEYS) {
-    await prisma.tenantFeature.upsert({
-      where: { tenantId_featureKey: { tenantId, featureKey } },
-      create: {
+  const existingFeatures = await prisma.tenantFeature.findMany({
+    where: {
+      tenantId,
+      featureKey: { in: [...MANAGED_FEATURE_KEYS] }
+    },
+    select: { featureKey: true }
+  });
+  const existingKeys = new Set(existingFeatures.map((feature) => feature.featureKey));
+  const missingFeatures = MANAGED_FEATURE_KEYS.filter((featureKey) => !existingKeys.has(featureKey));
+
+  if (missingFeatures.length) {
+    await prisma.tenantFeature.createMany({
+      data: missingFeatures.map((featureKey) => ({
         tenantId,
         featureKey,
         enabled: enabled.has(featureKey),
         updatedById: updatedById ?? undefined
-      },
-      update: {}
+      })),
+      skipDuplicates: true
     });
   }
 }

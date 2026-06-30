@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { companyCreateSchema } from "@/lib/validation";
-import { FEATURE_KEYS, INTEGRATION_TYPES, defaultEnabledFeatures } from "@/lib/constants";
+import { INTEGRATION_TYPES, MANAGED_FEATURE_KEYS, defaultEnabledFeatures } from "@/lib/constants";
 import { generateTemporaryPassword, hashPassword, sanitizeText } from "@/lib/security";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
@@ -66,7 +66,9 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: "desc" },
       include: {
         users: true,
-        features: true
+        features: {
+          where: { featureKey: { in: [...MANAGED_FEATURE_KEYS] } }
+        }
       }
     });
     return json({ companies: tenants.map(serializeTenant) });
@@ -112,7 +114,7 @@ export async function POST(request: NextRequest) {
       });
 
       await tx.tenantFeature.createMany({
-        data: FEATURE_KEYS.map((featureKey) => ({
+        data: MANAGED_FEATURE_KEYS.map((featureKey) => ({
           tenantId: createdTenant.id,
           featureKey,
           enabled: enabled.has(featureKey),

@@ -6,6 +6,7 @@ import { featureToggleSchema, parseFeatureKey } from "@/lib/validation";
 import { serializeFeature } from "@/lib/serializers";
 import { writeAuditLog } from "@/lib/audit";
 import { ensureTenantFeatureSchema } from "@/lib/tenant-feature-schema";
+import { isManagedFeatureKey } from "@/lib/constants";
 
 type Context = { params: Promise<{ id: string; featureKey: string }> };
 
@@ -14,6 +15,9 @@ export async function PATCH(request: NextRequest, context: Context) {
     const admin = await requirePlatformAdmin(request);
     const { id, featureKey: rawFeatureKey } = await context.params;
     const featureKey = parseFeatureKey(rawFeatureKey);
+    if (!isManagedFeatureKey(featureKey)) {
+      return json({ error: { code: "FEATURE_NOT_MANAGED", message: "This feature is not managed from the Features section." } }, { status: 404 });
+    }
     await ensureTenantFeatureSchema();
     const body = featureToggleSchema.parse(await request.json());
     const oldValue = await prisma.tenantFeature.findUnique({

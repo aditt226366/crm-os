@@ -1,8 +1,8 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { hashPassword, encryptJson, maskSecret } from "../lib/security";
 import {
-  FEATURE_KEYS,
   INTEGRATION_TYPES,
+  MANAGED_FEATURE_KEYS,
   defaultEnabledFeatures,
   type FeatureKey,
   type IntegrationType,
@@ -49,7 +49,7 @@ const companies: Array<{
 async function seedFeatures(tenantId: string, plan: Plan, adminId: string) {
   const enabled = defaultEnabledFeatures(plan);
   await Promise.all(
-    FEATURE_KEYS.map((featureKey) =>
+    MANAGED_FEATURE_KEYS.map((featureKey) =>
       prisma.tenantFeature.upsert({
         where: { tenantId_featureKey: { tenantId, featureKey } },
         create: {

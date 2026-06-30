@@ -28,6 +28,26 @@ export const FEATURE_KEYS = [
   "AI_AGENTS"
 ] as const;
 
+export const MANAGED_FEATURE_KEYS = [
+  "ADS",
+  "BULK_MESSAGING",
+  "CAMPAIGNS",
+  "AI_WORKFLOW_BUILDER",
+  "LEAD_MANAGEMENT",
+  "INBOX"
+] as const satisfies readonly FeatureKey[];
+
+const managedFeatureKeySet = new Set<FeatureKey>(MANAGED_FEATURE_KEYS);
+
+export function isManagedFeatureKey(value: string): value is (typeof MANAGED_FEATURE_KEYS)[number] {
+  return managedFeatureKeySet.has(value as FeatureKey);
+}
+
+export function managedFeatureOrder(value: string) {
+  const index = MANAGED_FEATURE_KEYS.findIndex((featureKey) => featureKey === value);
+  return index === -1 ? MANAGED_FEATURE_KEYS.length : index;
+}
+
 export const FEATURE_DEFINITIONS: Record<
   FeatureKey,
   { name: string; description: string; navLabel: string; route: string; showInNavigation?: boolean }
@@ -186,37 +206,23 @@ export const INTEGRATION_DEFINITIONS: Record<
 };
 
 export function defaultEnabledFeatures(plan: Plan): Set<FeatureKey> {
-  if (plan === "ENTERPRISE") {
-    return new Set(FEATURE_KEYS);
+  if (plan === "ENTERPRISE" || plan === "PRO") {
+    return new Set(MANAGED_FEATURE_KEYS);
   }
 
-  if (plan === "PRO") {
-    return new Set([
-      "INBOX",
-      "CONTACTS",
-      "TEMPLATES",
-      "CAMPAIGNS",
-      "BULK_MESSAGING",
-      "ADS",
-      "AI_WORKFLOW_BUILDER",
-      "LEAD_MANAGEMENT",
-      "ORDERS",
-      "KNOWLEDGE_BASE",
-      "SETTINGS",
-      "ANALYTICS",
-      "HUMAN_TAKEOVER",
-      "GOOGLE_SHEETS_IMPORT"
-    ]);
-  }
-
-  return new Set(["INBOX", "CONTACTS", "TEMPLATES", "LEAD_MANAGEMENT", "ORDERS", "SETTINGS", "ANALYTICS"]);
+  return new Set(["INBOX", "LEAD_MANAGEMENT"]);
 }
 
 export function getEnabledNavigation(features: Array<{ featureKey: string; enabled: boolean }>) {
   return features
     .filter((feature) => {
       const definition = FEATURE_DEFINITIONS[feature.featureKey as FeatureKey];
-      return Boolean(feature.enabled && definition && definition.showInNavigation !== false);
+      return Boolean(
+        feature.enabled &&
+        definition &&
+        isManagedFeatureKey(feature.featureKey) &&
+        definition.showInNavigation !== false
+      );
     })
     .map((feature) => {
       const definition = FEATURE_DEFINITIONS[feature.featureKey as FeatureKey];

@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requirePlatformAdmin } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
-import { type Plan } from "@/lib/constants";
+import { MANAGED_FEATURE_KEYS, managedFeatureOrder, type Plan } from "@/lib/constants";
 import { serializeFeature } from "@/lib/serializers";
 import { ensureTenantFeatureRows } from "@/lib/tenant-feature-schema";
 
@@ -23,10 +23,11 @@ export async function GET(request: NextRequest, context: Context) {
 
     await ensureTenantFeatureRows(id, tenant.plan as Plan, admin.id);
     const features = await prisma.tenantFeature.findMany({
-      where: { tenantId: id },
+      where: { tenantId: id, featureKey: { in: [...MANAGED_FEATURE_KEYS] } },
       include: { updatedBy: true },
       orderBy: { featureKey: "asc" }
     });
+    features.sort((a, b) => managedFeatureOrder(a.featureKey) - managedFeatureOrder(b.featureKey));
     return json({ features: features.map(serializeFeature) });
   } catch (error) {
     return errorResponse(error);
