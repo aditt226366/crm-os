@@ -1,18 +1,115 @@
 "use client";
 
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Building2, LogOut, Menu, Plus, Search, Sparkles } from "lucide-react";
 import { useAppShell } from "@/components/app/AppLayout";
 
 export function AppTopbar({ onOpenMobileSidebar }: { onOpenMobileSidebar: () => void }) {
   const router = useRouter();
-  const { user, enabledFeatureSet } = useAppShell();
+  const { user, navigation, enabledFeatureSet } = useAppShell();
   const whatsappConnected = user?.whatsapp.status === "CONNECTED";
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLDivElement | null>(null);
+
+  const searchActions = useMemo(() => {
+    const query = searchQuery.trim();
+    const encodedQuery = encodeURIComponent(query);
+    const searchableRoutes = [
+      enabledFeatureSet.has("LEAD_MANAGEMENT")
+        ? {
+            label: query ? `Search leads for "${query}"` : "Open Lead Management",
+            href: query ? `/app/leads?search=${encodedQuery}` : "/app/leads",
+            route: "/app/leads",
+            keywords: "lead leads contact contacts phone"
+          }
+        : null,
+      enabledFeatureSet.has("INBOX")
+        ? {
+            label: query ? `Search chats for "${query}"` : "Open Inbox",
+            href: query ? `/app/inbox?search=${encodedQuery}` : "/app/inbox",
+            route: "/app/inbox",
+            keywords: "chat chats inbox conversation conversations whatsapp"
+          }
+        : null,
+      enabledFeatureSet.has("CAMPAIGNS")
+        ? {
+            label: query ? `Search campaigns for "${query}"` : "Open Campaigns",
+            href: query ? `/app/campaigns?search=${encodedQuery}` : "/app/campaigns",
+            route: "/app/campaigns",
+            keywords: "campaign campaigns broadcast broadcasts template"
+          }
+        : null
+    ].filter((item): item is { label: string; href: string; route: string; keywords: string } => Boolean(item));
+    const searchableRouteSet = new Set(searchableRoutes.map((item) => item.route));
+    const moduleRoutes = navigation
+      .filter((item) => item.href !== "/app/dashboard" && !searchableRouteSet.has(item.href))
+      .map((item) => ({
+        label: `Open ${item.label}`,
+        href: item.href,
+        keywords: `${item.label} ${item.featureKey ?? ""}`
+      }));
+    const allActions = [...searchableRoutes, ...moduleRoutes];
+
+    if (!query) {
+      return allActions.slice(0, 6);
+    }
+
+    const needle = query.toLowerCase();
+    const exactSearchActions = searchableRoutes.filter((item) =>
+      `${item.label} ${item.keywords}`.toLowerCase().includes(needle)
+    );
+    const matchingModuleActions = moduleRoutes.filter((item) =>
+      `${item.label} ${item.keywords}`.toLowerCase().includes(needle)
+    );
+    const mergedActions = [...exactSearchActions, ...matchingModuleActions];
+    return (mergedActions.length ? mergedActions : searchableRoutes).slice(0, 6);
+  }, [enabledFeatureSet, navigation, searchQuery]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     router.push("/login");
   }
+
+  function openSearchAction(href: string) {
+    setSearchOpen(false);
+    router.push(href);
+  }
+
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const firstAction = searchActions[0];
+    if (firstAction) {
+      openSearchAction(firstAction.href);
+    }
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+        searchRef.current?.querySelector("input")?.focus();
+      }
+      if (event.key === "Escape") {
+        setSearchOpen(false);
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!searchRef.current?.contains(event.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, []);
 
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-[#030712]/82 backdrop-blur-2xl">
@@ -45,12 +142,51 @@ export function AppTopbar({ onOpenMobileSidebar }: { onOpenMobileSidebar: () => 
           </div>
         </div>
 
-        <div className="hidden min-w-[18rem] max-w-lg flex-[1.2] items-center gap-3 rounded-[24px] border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-400 shadow-inner shadow-black/20 xl:flex">
-          <Search className="h-4 w-4 shrink-0 text-cyan-100/80" />
-          <span className="truncate">Search leads, chats, campaigns...</span>
-          <span className="ml-auto rounded-full border border-white/10 bg-white/[0.05] px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-            Ctrl K
-          </span>
+        <div ref={searchRef} className="relative hidden min-w-[18rem] max-w-lg flex-[1.2] xl:block">
+          <form
+            onSubmit={submitSearch}
+            className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-400 shadow-inner shadow-black/20 transition focus-within:border-cyan-200/40 focus-within:bg-slate-950/78"
+          >
+            <Search className="h-4 w-4 shrink-0 text-cyan-100/80" />
+            <input
+              value={searchQuery}
+              onFocus={() => setSearchOpen(true)}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setSearchOpen(true);
+              }}
+              placeholder="Search leads, chats, campaigns..."
+              className="min-w-0 flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-500"
+            />
+            <span className="ml-auto rounded-full border border-white/10 bg-white/[0.05] px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Ctrl K
+            </span>
+          </form>
+          {searchOpen ? (
+            <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-50 overflow-hidden rounded-[22px] border border-cyan-200/18 bg-slate-950/96 p-2 shadow-[0_24px_70px_rgba(2,8,23,0.58)] backdrop-blur-2xl">
+              <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Search workspace
+              </div>
+              <div className="space-y-1">
+                {searchActions.map((action) => (
+                  <button
+                    key={`${action.label}-${action.href}`}
+                    type="button"
+                    onClick={() => openSearchAction(action.href)}
+                    className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm text-slate-300 transition hover:bg-cyan-300/10 hover:text-white"
+                  >
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-cyan-200/15 bg-cyan-200/[0.08] text-cyan-100">
+                      <Search className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="border-t border-white/10 px-3 py-2 text-xs text-slate-500">
+                Press Enter to open the first result.
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">

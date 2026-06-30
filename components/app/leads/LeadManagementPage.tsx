@@ -10,6 +10,7 @@ import {
   MessageCircle,
   Play,
   RefreshCw,
+  Search,
   Send,
   ThermometerSun,
   Users
@@ -121,13 +122,14 @@ function formatDate(value: string | null) {
   }).format(new Date(value));
 }
 
-export function LeadManagementPage() {
+export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: string }) {
   const [data, setData] = useState<LeadData | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [autoSyncing, setAutoSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
+  const [leadQuery, setLeadQuery] = useState(initialSearch);
   const [templateId, setTemplateId] = useState("");
   const [range, setRange] = useState("A:Z");
   const [maxRows, setMaxRows] = useState(200);
@@ -169,6 +171,24 @@ export function LeadManagementPage() {
 
   const ready = useMemo(() => data?.integrations.every((integration) => integration.ready) ?? false, [data]);
   const selectedTemplate = data?.templates.find((template) => template.id === templateId) ?? data?.templates[0] ?? null;
+  const filteredLeads = useMemo(() => {
+    const leads = data?.leads ?? [];
+    const needle = leadQuery.trim().toLowerCase();
+    if (!needle) return leads;
+
+    return leads.filter((lead) =>
+      [
+        lead.contact.name,
+        lead.contact.phone,
+        lead.status,
+        lead.temperature,
+        lead.source,
+        lead.conversation?.status,
+        lead.conversation?.lastMessageText,
+        lead.conversation?.lastMessageStatus
+      ].some((value) => value?.toLowerCase().includes(needle))
+    );
+  }, [data?.leads, leadQuery]);
 
   const runFlow = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (flowRunningRef.current) return;
@@ -381,32 +401,52 @@ export function LeadManagementPage() {
             ) : null}
 
             <section>
-              <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <h2 className="text-xl font-semibold text-white">Recent Leads</h2>
-                <StatusBadge value="LIVE DATA" />
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="flex h-10 min-w-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-sm focus-within:border-cyan-200/35 sm:w-80">
+                    <Search className="h-4 w-4 shrink-0 text-slate-500" />
+                    <input
+                      value={leadQuery}
+                      onChange={(event) => setLeadQuery(event.target.value)}
+                      placeholder="Search recent leads"
+                      className="min-w-0 flex-1 bg-transparent text-white outline-none placeholder:text-slate-600"
+                    />
+                  </div>
+                  <StatusBadge value="LIVE DATA" />
+                </div>
               </div>
-              {data.leads.length ? (
+              {filteredLeads.length ? (
                 <div className="overflow-hidden rounded-[24px] border border-white/10">
-                  <div className="min-w-[760px] divide-y divide-white/10">
-                    {data.leads.map((lead) => (
-                      <div key={lead.id} className="grid grid-cols-[1.15fr_0.75fr_0.75fr_1fr_0.75fr] items-center gap-4 bg-white/[0.025] px-4 py-4">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-white">{lead.contact.name}</p>
-                          <p className="mt-1 truncate text-xs text-slate-500">{lead.contact.phone}</p>
+                  <div className="custom-scrollbar max-h-[34rem] overflow-auto">
+                    <div className="min-w-[760px] divide-y divide-white/10">
+                      {filteredLeads.map((lead) => (
+                        <div key={lead.id} className="grid grid-cols-[1.15fr_0.75fr_0.75fr_1fr_0.75fr] items-center gap-4 bg-white/[0.025] px-4 py-4">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-white">{lead.contact.name}</p>
+                            <p className="mt-1 truncate text-xs text-slate-500">{lead.contact.phone}</p>
+                          </div>
+                          <StatusBadge value={lead.temperature} />
+                          <StatusBadge value={lead.status} />
+                          <div className="min-w-0">
+                            <p className="truncate text-sm text-slate-300">{lead.conversation?.lastMessageText ?? lead.source.replaceAll("_", " ")}</p>
+                            {lead.conversation?.lastMessageStatus ? <StatusBadge value={lead.conversation.lastMessageStatus} className="mt-2" /> : null}
+                          </div>
+                          <p className="text-right text-xs text-slate-500">{formatDate(lead.conversation?.lastMessageAt ?? lead.updatedAt)}</p>
                         </div>
-                        <StatusBadge value={lead.temperature} />
-                        <StatusBadge value={lead.status} />
-                        <div className="min-w-0">
-                          <p className="truncate text-sm text-slate-300">{lead.conversation?.lastMessageText ?? lead.source.replaceAll("_", " ")}</p>
-                          {lead.conversation?.lastMessageStatus ? <StatusBadge value={lead.conversation.lastMessageStatus} className="mt-2" /> : null}
-                        </div>
-                        <p className="text-right text-xs text-slate-500">{formatDate(lead.conversation?.lastMessageAt ?? lead.updatedAt)}</p>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
               ) : (
-                <EmptyState title="No leads yet" description="Google Sheets leads and WhatsApp conversations will appear here after the first flow run." />
+                <EmptyState
+                  title={data.leads.length ? "No matching leads" : "No leads yet"}
+                  description={
+                    data.leads.length
+                      ? "Adjust the search text to see more recent leads."
+                      : "Google Sheets leads and WhatsApp conversations will appear here after the first flow run."
+                  }
+                />
               )}
             </section>
           </>

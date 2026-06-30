@@ -653,12 +653,12 @@ function ContactPanel({
   );
 }
 
-export function InboxPage() {
+export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [filter, setFilter] = useState<InboxFilter>("all");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialSearch);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingThread, setLoadingThread] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
