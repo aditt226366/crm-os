@@ -35,6 +35,13 @@ function parseTake(value: string | null) {
   return Math.min(Math.floor(take), 500);
 }
 
+function temperatureFilter(value: string) {
+  if (value === "hot") return "HOT";
+  if (value === "warm") return "WARM";
+  if (value === "scrap") return "SCRAP";
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { user } = await requireFeature(request, "INBOX");
@@ -44,6 +51,7 @@ export async function GET(request: NextRequest) {
     const filter = searchParams.get("filter") ?? "all";
     const query = searchParams.get("q")?.trim();
     const take = parseTake(searchParams.get("take"));
+    const leadTemperature = temperatureFilter(filter);
 
     const where: Prisma.ConversationWhereInput = { tenantId };
     const and: Prisma.ConversationWhereInput[] = [];
@@ -67,8 +75,11 @@ export async function GET(request: NextRequest) {
     if (filter === "human-queue") {
       and.push(activeHumanQueueWhere);
     }
-    if (filter !== "all" && filter !== "human-queue") {
+    if (filter !== "all" && filter !== "human-queue" && !leadTemperature) {
       and.push(notInHumanQueueWhere);
+    }
+    if (leadTemperature) {
+      and.push({ leads: { some: { temperature: leadTemperature } } });
     }
     if (filter === "orders") {
       and.push({ orders: { some: { status: { in: [...confirmedOrderStatuses] } } } });
@@ -76,7 +87,7 @@ export async function GET(request: NextRequest) {
     if (filter === "broadcast" || filter === "campaign" || filter === "ads") {
       and.push({ source: filter === "ads" ? "AD" : filter.toUpperCase() as "BROADCAST" | "CAMPAIGN" });
     }
-    if (filter !== "all") {
+    if (filter !== "all" && !leadTemperature) {
       and.push({ messages: { none: blockedMessageWhere } });
     }
 
@@ -88,6 +99,11 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         contact: true,
+        leads: {
+          ...(leadTemperature ? { where: { temperature: leadTemperature } } : {}),
+          orderBy: { updatedAt: "desc" },
+          take: 1
+        },
         queueItems: { where: { status: { in: ["OPEN", "ASSIGNED"] } }, orderBy: { priority: "desc" }, take: 1 },
         orders: {
           ...(filter === "orders" ? { where: { status: { in: [...confirmedOrderStatuses] } } } : {}),
@@ -113,14 +129,7 @@ export async function GET(request: NextRequest) {
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
     });
 
-    const filteredConversations = conversations.filter((conversation) => {
-      const leadTemperature = conversation.contact.leadTemperature;
-      if (filter === "hot") return leadTemperature === "HOT";
-      if (filter === "warm") return leadTemperature === "WARM";
-      if (filter === "scrap") return leadTemperature === "SCRAP";
-      return true;
-    });
-    const limitedConversations = take === undefined ? filteredConversations : filteredConversations.slice(0, take);
+    const limitedConversations = take === undefined ? conversations : conversations.slice(0, take);
 
     return json({
       conversations: limitedConversations.map((conversation) =>

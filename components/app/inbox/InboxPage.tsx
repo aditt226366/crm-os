@@ -55,6 +55,7 @@ type Conversation = {
   };
   humanQueue: { id: string; status: string; priority: number; reason: string } | null;
   order: { id: string; status: string; orderNumber: string } | null;
+  leadTemperature: string;
   hasFailedMessages: boolean;
   hasMetaDeliveryLimitedMessages: boolean;
 };
@@ -140,7 +141,7 @@ function conversationCustomerReplyCount(conversation: Conversation) {
 }
 
 function conversationTemperature(conversation: Conversation) {
-  const temperature = conversation.contact.leadTemperature.toLowerCase();
+  const temperature = (conversation.leadTemperature || conversation.contact.leadTemperature).toLowerCase();
   if (temperature === "hot" || temperature === "warm" || temperature === "scrap") {
     return temperature;
   }
@@ -156,12 +157,12 @@ function matchesActiveFilter(conversation: Conversation, filter: string) {
   const inHumanQueue = conversation.humanTakeover || Boolean(conversation.humanQueue);
   if (filter === "all") return true;
   if (filter === "human-queue") return inHumanQueue;
-  if (inHumanQueue) return false;
-  if (conversation.hasFailedMessages || conversation.hasMetaDeliveryLimitedMessages) return false;
-  if (filter === "unread") return conversation.unreadCount > 0;
   if (filter === "hot") return temperature === "hot";
   if (filter === "warm") return temperature === "warm";
   if (filter === "scrap") return temperature === "scrap";
+  if (inHumanQueue) return false;
+  if (conversation.hasFailedMessages || conversation.hasMetaDeliveryLimitedMessages) return false;
+  if (filter === "unread") return conversation.unreadCount > 0;
   if (filter === "orders") return Boolean(conversation.order && confirmedOrderStatuses.has(conversation.order.status));
   if (filter === "broadcast") return conversation.source === "BROADCAST";
   if (filter === "campaign") return conversation.source === "CAMPAIGN";

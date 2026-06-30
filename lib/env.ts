@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertNoPublicSecretEnv } from "./env-security";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().optional(),
@@ -25,6 +26,8 @@ const productionEnvSchema = z.object({
 });
 
 const parsed = envSchema.safeParse(process.env);
+
+assertNoPublicSecretEnv();
 
 const isProductionRuntime =
   process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build";

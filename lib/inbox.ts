@@ -81,6 +81,7 @@ export function serializeConversation(conversation: {
     lastMessageAt: Date | null;
     lastContactedAt: Date | null;
   };
+  leads?: Array<{ temperature: string }>;
   queueItems?: Array<{ id: string; status: string; priority: number; reason: string }>;
   orders?: Array<{ id: string; status: string; orderNumber: string }>;
   hasFailedMessages?: boolean;
@@ -121,6 +122,7 @@ export function serializeConversation(conversation: {
       lastMessageAt: conversation.contact.lastMessageAt?.toISOString() ?? null,
       lastContactedAt: conversation.contact.lastContactedAt?.toISOString() ?? null
     },
+    leadTemperature: conversation.leads?.[0]?.temperature ?? conversation.contact.leadTemperature,
     humanQueue: conversation.queueItems?.find((item) => item.status !== "RESOLVED") ?? null,
     order: conversation.orders?.[0] ?? null,
     hasFailedMessages: Boolean(conversation.hasFailedMessages),
@@ -134,6 +136,7 @@ export async function getTenantConversation(tenantId: string, conversationId: st
     where: { id: conversationId, tenantId },
     include: {
       contact: true,
+      leads: { orderBy: { updatedAt: "desc" }, take: 1 },
       queueItems: { orderBy: [{ status: "asc" }, { priority: "desc" }] },
       orders: { orderBy: { createdAt: "desc" }, take: 1 }
     }
