@@ -114,10 +114,10 @@ export async function GET(request: NextRequest) {
     });
 
     const filteredConversations = conversations.filter((conversation) => {
-      const customerReplyCount = conversation.customerReplyCount;
-      if (filter === "hot") return customerReplyCount >= 6;
-      if (filter === "warm") return customerReplyCount >= 2 && customerReplyCount <= 5;
-      if (filter === "scrap") return customerReplyCount <= 1;
+      const leadTemperature = conversation.contact.leadTemperature;
+      if (filter === "hot") return leadTemperature === "HOT";
+      if (filter === "warm") return leadTemperature === "WARM";
+      if (filter === "scrap") return leadTemperature === "SCRAP";
       return true;
     });
     const limitedConversations = take === undefined ? filteredConversations : filteredConversations.slice(0, take);

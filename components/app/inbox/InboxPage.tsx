@@ -139,17 +139,29 @@ function conversationCustomerReplyCount(conversation: Conversation) {
   return conversation.customerReplyCount || conversation.contact.customerReplyCount || 0;
 }
 
-function matchesActiveFilter(conversation: Conversation, filter: string) {
+function conversationTemperature(conversation: Conversation) {
+  const temperature = conversation.contact.leadTemperature.toLowerCase();
+  if (temperature === "hot" || temperature === "warm" || temperature === "scrap") {
+    return temperature;
+  }
+
   const customerReplyCount = conversationCustomerReplyCount(conversation);
+  if (customerReplyCount >= 6) return "hot";
+  if (customerReplyCount >= 2) return "warm";
+  return "scrap";
+}
+
+function matchesActiveFilter(conversation: Conversation, filter: string) {
+  const temperature = conversationTemperature(conversation);
   const inHumanQueue = conversation.humanTakeover || Boolean(conversation.humanQueue);
   if (filter === "all") return true;
   if (filter === "human-queue") return inHumanQueue;
   if (inHumanQueue) return false;
   if (conversation.hasFailedMessages || conversation.hasMetaDeliveryLimitedMessages) return false;
   if (filter === "unread") return conversation.unreadCount > 0;
-  if (filter === "hot") return customerReplyCount >= 6;
-  if (filter === "warm") return customerReplyCount >= 2 && customerReplyCount <= 5;
-  if (filter === "scrap") return customerReplyCount <= 1;
+  if (filter === "hot") return temperature === "hot";
+  if (filter === "warm") return temperature === "warm";
+  if (filter === "scrap") return temperature === "scrap";
   if (filter === "orders") return Boolean(conversation.order && confirmedOrderStatuses.has(conversation.order.status));
   if (filter === "broadcast") return conversation.source === "BROADCAST";
   if (filter === "campaign") return conversation.source === "CAMPAIGN";
@@ -651,14 +663,15 @@ export function InboxPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const threadCardRef = useRef<HTMLDivElement | null>(null);
 
   const visibleConversations = useMemo(
     () => conversations.filter((conversation) => matchesActiveFilter(conversation, filter)),
     [conversations, filter]
   );
   const selected = useMemo(
-    () => visibleConversations.find((conversation) => conversation.id === selectedId) ?? null,
-    [selectedId, visibleConversations]
+    () => conversations.find((conversation) => conversation.id === selectedId) ?? null,
+    [conversations, selectedId]
   );
 
   const serviceWindowClosed = useMemo(() => {
@@ -826,9 +839,18 @@ export function InboxPage() {
     }
   }
 
+  function selectConversation(conversationId: string) {
+    setSelectedId(conversationId);
+    window.setTimeout(() => {
+      if (window.matchMedia("(max-width: 1023px)").matches) {
+        threadCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 0);
+  }
+
   return (
     <FeatureGuard featureKey="INBOX">
-      <div className="flex h-[calc(100vh-7rem)] min-h-0 flex-col gap-4 overflow-hidden">
+      <div className="flex min-h-[calc(100vh-7rem)] flex-col gap-4 lg:h-[calc(100vh-7rem)] lg:min-h-0 lg:overflow-hidden">
         <div className="shrink-0 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-200/80">Inbox</p>
@@ -840,8 +862,8 @@ export function InboxPage() {
           </div>
         </div>
 
-        <section className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[22rem_minmax(0,1fr)] xl:grid-cols-[22rem_minmax(0,1fr)_21rem]">
-          <GlassCard className="flex min-h-0 flex-col overflow-hidden">
+        <section className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[22rem_minmax(0,1fr)] xl:grid-cols-[22rem_minmax(0,1fr)_21rem]">
+          <GlassCard className="flex max-h-[36rem] min-h-[24rem] flex-col overflow-hidden lg:max-h-none lg:min-h-0">
             <div className="shrink-0 border-b border-white/10 p-4">
               <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm">
                 <Search className="h-4 w-4 text-slate-500" />
@@ -879,8 +901,8 @@ export function InboxPage() {
                     <ConversationRow
                       key={conversation.id}
                       conversation={conversation}
-                      active={conversation.id === selected?.id}
-                      onSelect={() => setSelectedId(conversation.id)}
+                      active={conversation.id === selectedId}
+                      onSelect={() => selectConversation(conversation.id)}
                     />
                   ))}
                 </div>
@@ -892,60 +914,62 @@ export function InboxPage() {
             </div>
           </GlassCard>
 
-          <GlassCard className="flex min-h-0 flex-col overflow-hidden">
-            <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 p-4">
-              {selected ? (
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="truncate font-semibold text-white">{selected.contact.name}</h2>
-                    <StatusBadge value={selected.contact.leadTemperature} />
+          <div ref={threadCardRef} className="min-h-0 scroll-mt-4">
+            <GlassCard className="flex h-full min-h-[34rem] flex-col overflow-hidden lg:min-h-0">
+              <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 p-4">
+                {selected ? (
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h2 className="truncate font-semibold text-white">{selected.contact.name}</h2>
+                      <StatusBadge value={selected.contact.leadTemperature} />
+                    </div>
+                    <p className="mt-1 truncate text-xs text-slate-500">
+                      {selected.contact.phone} | {selected.source} | {selected.customerReplyCount} inbound replies
+                    </p>
                   </div>
-                  <p className="mt-1 truncate text-xs text-slate-500">
-                    {selected.contact.phone} | {selected.source} | {selected.customerReplyCount} inbound replies
-                  </p>
-                </div>
-              ) : (
-                <p className="text-sm text-slate-500">Select a conversation</p>
-              )}
-              {selected?.humanTakeover ? <StatusBadge value="HUMAN TAKEOVER" /> : null}
-              {selected?.aiRepliesStopped ? <StatusBadge value="AI REPLIES STOPPED" /> : null}
-            </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Select a conversation</p>
+                )}
+                {selected?.humanTakeover ? <StatusBadge value="HUMAN TAKEOVER" /> : null}
+                {selected?.aiRepliesStopped ? <StatusBadge value="AI REPLIES STOPPED" /> : null}
+              </div>
 
-            <div ref={scrollRef} className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-950/30 p-4">
-              {loadingThread ? (
-                <LoadingSkeleton rows={8} />
-              ) : messages.length ? (
-                messages.map((message, index) => {
-                  const previousMessage = messages[index - 1];
-                  const showDateSeparator =
-                    !previousMessage || messageDateKey(previousMessage.createdAt) !== messageDateKey(message.createdAt);
+              <div ref={scrollRef} className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-950/30 p-4">
+                {loadingThread ? (
+                  <LoadingSkeleton rows={8} />
+                ) : messages.length ? (
+                  messages.map((message, index) => {
+                    const previousMessage = messages[index - 1];
+                    const showDateSeparator =
+                      !previousMessage || messageDateKey(previousMessage.createdAt) !== messageDateKey(message.createdAt);
 
-                  return (
-                    <Fragment key={message.id}>
-                      {showDateSeparator ? <MessageDateSeparator value={message.createdAt} /> : null}
-                      <MessageBubble message={message} />
-                    </Fragment>
-                  );
-                })
-              ) : (
-                <div className="grid h-full place-items-center text-center text-sm text-slate-500">
-                  <div>
-                    <Users className="mx-auto mb-3 h-8 w-8 text-cyan-100/50" />
-                    Select a conversation to see WhatsApp-style history.
+                    return (
+                      <Fragment key={message.id}>
+                        {showDateSeparator ? <MessageDateSeparator value={message.createdAt} /> : null}
+                        <MessageBubble message={message} />
+                      </Fragment>
+                    );
+                  })
+                ) : (
+                  <div className="grid h-full place-items-center text-center text-sm text-slate-500">
+                    <div>
+                      <Users className="mx-auto mb-3 h-8 w-8 text-cyan-100/50" />
+                      Select a conversation to see WhatsApp-style history.
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
 
-            <Composer
-              selected={selected}
-              disabled={serviceWindowClosed}
-              onSend={sendReply}
-              onHumanTakeover={humanTakeover}
-              onToggleAiReplies={toggleAiReplies}
-              onAttachment={sendAttachment}
-            />
-          </GlassCard>
+              <Composer
+                selected={selected}
+                disabled={serviceWindowClosed}
+                onSend={sendReply}
+                onHumanTakeover={humanTakeover}
+                onToggleAiReplies={toggleAiReplies}
+                onAttachment={sendAttachment}
+              />
+            </GlassCard>
+          </div>
 
           <ContactPanel selected={selected} onAddNote={addNote} />
         </section>
