@@ -61,7 +61,10 @@ export async function GET(request: NextRequest) {
         OR: [
           { lastMessageText: { contains: query, mode: "insensitive" } },
           { contact: { is: { name: { contains: query, mode: "insensitive" } } } },
-          { contact: { is: { phone: { contains: query, mode: "insensitive" } } } }
+          { contact: { is: { phone: { contains: query, mode: "insensitive" } } } },
+          { contact: { is: { phoneNormalized: { contains: query, mode: "insensitive" } } } },
+          { contact: { is: { waId: { contains: query, mode: "insensitive" } } } },
+          { contact: { is: { last10: { contains: query, mode: "insensitive" } } } }
         ]
       });
     }

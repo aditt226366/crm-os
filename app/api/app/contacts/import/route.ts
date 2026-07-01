@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { ApiError, errorResponse, json } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
-import { normalizePhone } from "@/lib/inbox";
+import { resolveContactForPhone } from "@/lib/contact-identity";
+import { isValidNormalizedPhone, normalizePhone } from "@/lib/phone/normalizePhone";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { safeCreateAuditLog } from "@/lib/audit";
 
@@ -34,7 +34,7 @@ function normalizeTags(value: unknown) {
 }
 
 function validPhone(phone: string) {
-  return /^\+\d{7,15}$/.test(phone);
+  return isValidNormalizedPhone(normalizePhone(phone));
 }
 
 export async function POST(request: NextRequest) {
@@ -69,7 +69,8 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const phone = normalizePhone(rawPhone);
+      const phoneIdentity = normalizePhone(rawPhone);
+      const phone = phoneIdentity.e164;
       if (!validPhone(phone)) {
         result.invalid += 1;
         result.skipped += 1;
@@ -83,39 +84,21 @@ export async function POST(request: NextRequest) {
 
       const optIn = toBoolean(row.optIn);
       if (!optIn) result.optedOut += 1;
-      const existing = await prisma.contact.findUnique({
-        where: { tenantId_phone: { tenantId, phone } },
-        select: { id: true }
-      });
-
-      await prisma.contact.upsert({
-        where: { tenantId_phone: { tenantId, phone } },
-        create: {
-          tenantId,
-          name: String(row.name ?? "").trim() || phone,
-          phone,
-          optIn,
-          source: "MANUAL",
-          tags: normalizeTags(row.tags),
-          customFields: {
-            importSource: "contacts_csv",
-            importedFileName: typeof body.fileName === "string" ? body.fileName : null,
-            sourceLabel: typeof row.source === "string" ? row.source : "CSV"
-          }
-        },
-        update: {
-          name: String(row.name ?? "").trim() || undefined,
-          optIn,
-          tags: normalizeTags(row.tags),
-          customFields: {
-            importSource: "contacts_csv",
-            importedFileName: typeof body.fileName === "string" ? body.fileName : null,
-            sourceLabel: typeof row.source === "string" ? row.source : "CSV"
-          }
+      const resolved = await resolveContactForPhone({
+        tenantId,
+        phone: rawPhone,
+        name: String(row.name ?? "").trim() || phone,
+        source: "MANUAL",
+        optIn,
+        tags: normalizeTags(row.tags),
+        customFields: {
+          importSource: "contacts_csv",
+          importedFileName: typeof body.fileName === "string" ? body.fileName : null,
+          sourceLabel: typeof row.source === "string" ? row.source : "CSV"
         }
       });
 
-      if (existing) result.updated += 1;
+      if (!resolved.created) result.updated += 1;
       else result.imported += 1;
     }
 

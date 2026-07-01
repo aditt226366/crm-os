@@ -377,6 +377,11 @@ model Contact {
   tenant                        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name                          String
   phone                         String
+  phoneRaw                      String?
+  phoneNormalized               String?
+  waId                          String?
+  last10                        String?
+  countryCode                   String?
   email                         String?
   optIn                         Boolean              @default(true)
   optOut                        Boolean              @default(false)
@@ -401,6 +406,9 @@ model Contact {
   campaignRecipients            CampaignRecipient[]
 
   @@unique([tenantId, phone])
+  @@index([tenantId, waId])
+  @@index([tenantId, phoneNormalized])
+  @@index([tenantId, last10])
   @@index([tenantId, leadTemperature])
   @@index([tenantId, source])
   @@index([lastMessageAt])

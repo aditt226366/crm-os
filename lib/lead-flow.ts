@@ -2,6 +2,7 @@ import { Prisma, type IntegrationType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { safeCreateAuditLog } from "@/lib/audit";
+import { resolveContactForPhone } from "@/lib/contact-identity";
 import { INTEGRATION_DEFINITIONS, type FeatureKey } from "@/lib/constants";
 import {
   ensureGoogleSheetStatusColumn,
@@ -9,7 +10,7 @@ import {
   updateGoogleSheetLeadStatuses,
   type SheetLead
 } from "@/lib/google-sheets-leads";
-import { createOutboundConversationMessage, normalizePhone, serializeConversation, serializeMessage } from "@/lib/inbox";
+import { createOutboundConversationMessage, serializeConversation, serializeMessage } from "@/lib/inbox";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
@@ -368,37 +369,23 @@ export async function leadFlowSummary(tenantId: string) {
 
 async function upsertLeadConversation({ tenantId, lead }: { tenantId: string; lead: SheetLead }) {
   const now = new Date();
-  const phone = normalizePhone(lead.phone);
-  const contact = await prisma.contact.upsert({
-    where: {
-      tenantId_phone: {
-        tenantId,
-        phone
+  const resolved = await resolveContactForPhone({
+    tenantId,
+    phone: lead.phone,
+    name: lead.name,
+    source: "GOOGLE_SHEET",
+    tags: ["google-sheet"],
+    customFields: {
+      googleSheet: {
+        rowNumber: lead.rowNumber,
+        row: lead.row
       }
-    },
-    create: {
-      tenantId,
-      name: lead.name || phone,
-      phone,
-      source: "GOOGLE_SHEET",
-      tags: ["google-sheet"],
-      customFields: {
-        googleSheet: {
-          rowNumber: lead.rowNumber,
-          row: lead.row
-        }
-      } as Prisma.InputJsonValue,
+    }
+  });
+  const contact = await prisma.contact.update({
+    where: { id: resolved.contact.id },
+    data: {
       lastMessageAt: now
-    },
-    update: {
-      name: lead.name || undefined,
-      source: "GOOGLE_SHEET",
-      customFields: {
-        googleSheet: {
-          rowNumber: lead.rowNumber,
-          row: lead.row
-        }
-      } as Prisma.InputJsonValue
     }
   });
 

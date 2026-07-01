@@ -1,17 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
+import { resolveContactForPhone } from "@/lib/contact-identity";
 import { recalculateConversationLeadTemperature } from "@/lib/lead-temperature";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
+import { normalizePhoneE164 } from "@/lib/phone/normalizePhone";
 import { SCRAP_DORMANT_TAG, withoutScrapDormantTag } from "@/lib/scrap-follow-up-state";
 
 type ConversationMessageType = "TEXT" | "TEMPLATE" | "IMAGE" | "DOCUMENT" | "AUDIO" | "VIDEO" | "SYSTEM" | "NOTE";
 
 export function normalizePhone(phone: string) {
-  const trimmed = phone.trim();
-  if (trimmed.startsWith("+")) {
-    return `+${trimmed.slice(1).replace(/\D/g, "")}`;
-  }
-  return `+${trimmed.replace(/\D/g, "")}`;
+  return normalizePhoneE164(phone);
 }
 
 export function serializeMessage(message: {
@@ -68,6 +66,9 @@ export function serializeConversation(conversation: {
     id: string;
     name: string;
     phone: string;
+    phoneNormalized?: string | null;
+    waId?: string | null;
+    last10?: string | null;
     email: string | null;
     optIn: boolean;
     optOut: boolean;
@@ -109,6 +110,9 @@ export function serializeConversation(conversation: {
       id: conversation.contact.id,
       name: conversation.contact.name,
       phone: conversation.contact.phone,
+      phoneNormalized: conversation.contact.phoneNormalized ?? conversation.contact.phone,
+      waId: conversation.contact.waId ?? null,
+      last10: conversation.contact.last10 ?? null,
       email: conversation.contact.email,
       optIn: conversation.contact.optIn,
       optOut: conversation.contact.optOut,
@@ -155,6 +159,7 @@ export async function upsertInboundConversationMessage({
   name,
   body,
   messageId,
+  waId,
   type = "TEXT",
   metadata,
   source = "ORGANIC",
@@ -165,13 +170,13 @@ export async function upsertInboundConversationMessage({
   name?: string;
   body: string;
   messageId?: string;
+  waId?: string;
   type?: Extract<ConversationMessageType, "TEXT" | "IMAGE" | "DOCUMENT" | "AUDIO" | "VIDEO">;
   metadata?: unknown;
   source?: "BROADCAST" | "CAMPAIGN" | "AD" | "ORGANIC" | "GOOGLE_SHEET" | "MANUAL";
   sourceId?: string;
 }) {
   await ensureLeadWorkspaceSchema();
-  const normalizedPhone = normalizePhone(phone);
 
   if (messageId) {
     const existing = await prisma.message.findUnique({
@@ -197,22 +202,16 @@ export async function upsertInboundConversationMessage({
   const serviceWindow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
   const isOptOutRequest = ["STOP", "UNSUBSCRIBE", "CANCEL"].includes(body.trim().toUpperCase());
-  let contact = await prisma.contact.upsert({
-    where: {
-      tenantId_phone: {
-        tenantId,
-        phone: normalizedPhone
-      }
-    },
-    create: {
-      tenantId,
-      name: name?.trim() || normalizedPhone,
-      phone: normalizedPhone,
-      source,
-      lastMessageAt: now
-    },
-    update: {
-      name: name?.trim() || undefined,
+  const resolvedContact = await resolveContactForPhone({
+    tenantId,
+    phone,
+    waId,
+    name,
+    source
+  });
+  let contact = await prisma.contact.update({
+    where: { id: resolvedContact.contact.id },
+    data: {
       lastMessageAt: now,
       optOut: isOptOutRequest ? true : undefined
     }
@@ -225,6 +224,7 @@ export async function upsertInboundConversationMessage({
     });
   }
 
+  const conversationSource = contact.source === "GOOGLE_SHEET" ? "GOOGLE_SHEET" : source;
   const conversation =
     (await prisma.conversation.findFirst({
       where: {
@@ -238,7 +238,7 @@ export async function upsertInboundConversationMessage({
       data: {
         tenantId,
         contactId: contact.id,
-        source,
+        source: conversationSource,
         sourceId,
         status: "OPEN",
         customerServiceWindowExpiresAt: serviceWindow
@@ -271,7 +271,7 @@ export async function upsertInboundConversationMessage({
   const updatedConversation = await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
-      source: conversation.source === "ORGANIC" ? source : conversation.source,
+      source: conversation.source === "ORGANIC" && conversationSource !== "ORGANIC" ? conversationSource : conversation.source,
       sourceId: conversation.sourceId ?? sourceId,
       status: "OPEN",
       unreadCount: { increment: 1 },

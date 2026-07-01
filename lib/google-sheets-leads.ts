@@ -1,7 +1,7 @@
 import { SignJWT, importPKCS8 } from "jose";
 import { ApiError } from "@/lib/api";
 import type { IntegrationConfig } from "@/lib/integration-vault";
-import { normalizePhone } from "@/lib/inbox";
+import { normalizePhoneE164 } from "@/lib/phone/normalizePhone";
 
 export type SheetLead = {
   phone: string;
@@ -125,9 +125,9 @@ function phoneFromValue(value: string, defaultCountryCode: string | null) {
   const digits = (explicit?.[1] ?? compact).replace(/\D/g, "");
   if (digits.length < 8 || digits.length > 15) return null;
   if (!explicit && defaultCountryCode && digits.length === 10) {
-    return normalizePhone(`+${defaultCountryCode}${digits}`);
+    return normalizePhoneE164(`+${defaultCountryCode}${digits}`);
   }
-  return normalizePhone(explicit ? `+${digits}` : compact);
+  return normalizePhoneE164(explicit ? `+${digits}` : compact);
 }
 
 function inferPhone(row: string[], phoneIndex: number | null, defaultCountryCode: string | null) {

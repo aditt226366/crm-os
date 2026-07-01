@@ -1,6 +1,6 @@
 import { ApiError } from "@/lib/api";
 import type { IntegrationConfig } from "@/lib/integration-vault";
-import { normalizePhone } from "@/lib/inbox";
+import { normalizePhoneE164 } from "@/lib/phone/normalizePhone";
 import type { WhatsAppTemplateVariableMode } from "@/lib/whatsapp-template-config";
 
 type WhatsAppSendResult = {
@@ -43,7 +43,7 @@ function graphApiVersion() {
 }
 
 function toWhatsAppRecipient(phone: string) {
-  return normalizePhone(phone).replace(/^\+/, "");
+  return normalizePhoneE164(phone).replace(/^\+/, "");
 }
 
 function metaErrorText(data: unknown, fallback: string) {

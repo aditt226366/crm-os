@@ -455,6 +455,7 @@ export async function POST(request: NextRequest) {
           const result = await upsertInboundConversationMessage({
             tenantId,
             phone: from,
+            waId: contact?.wa_id ?? from,
             name: contact?.profile?.name,
             body,
             messageId: message.id,
