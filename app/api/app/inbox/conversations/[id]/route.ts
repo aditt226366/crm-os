@@ -1,0 +1,75 @@
+import { NextRequest } from "next/server";
+import { requireFeature } from "@/lib/guards";
+import { errorResponse, json } from "@/lib/api";
+import { getTenantConversation, serializeConversation, serializeMessage } from "@/lib/inbox";
+import { prisma } from "@/lib/prisma";
+import { isMetaDeliveryLimitError } from "@/lib/meta-delivery-limit";
+
+type Context = { params: Promise<{ id: string }> };
+
+export async function GET(request: NextRequest, context: Context) {
+  try {
+    const { user } = await requireFeature(request, "INBOX");
+    const { id } = await context.params;
+    const existingConversation = await getTenantConversation(user.tenantId!, id);
+    const conversation =
+      existingConversation.unreadCount > 0
+        ? await prisma.conversation.update({
+            where: { id: existingConversation.id },
+            data: { unreadCount: 0 },
+            include: {
+              contact: true,
+              queueItems: { orderBy: [{ status: "asc" }, { priority: "desc" }] },
+              orders: { orderBy: { createdAt: "desc" }, take: 1 }
+            }
+          })
+        : existingConversation;
+    const [messages, messageCount, blockedMessages] = await Promise.all([
+      prisma.message.findMany({
+        where: { tenantId: user.tenantId!, conversationId: id },
+        orderBy: { createdAt: "desc" },
+        take: 40
+      }),
+      prisma.message.count({
+        where: {
+          tenantId: user.tenantId!,
+          conversationId: id,
+          type: { notIn: ["NOTE", "SYSTEM"] }
+        }
+      }),
+      prisma.message.findMany({
+        where: {
+          tenantId: user.tenantId!,
+          conversationId: id,
+          OR: [
+            { status: "FAILED" },
+            { metadata: { path: ["metaDeliveryLimit", "status"], equals: "META_DELIVERY_LIMITED" } },
+            { failureReason: { contains: "healthy ecosystem engagement", mode: "insensitive" } },
+            { failureReason: { contains: "131049" } }
+          ]
+        },
+        select: {
+          id: true,
+          status: true,
+          failureReason: true,
+          metadata: true
+        },
+        take: 5
+      })
+    ]);
+
+    return json({
+      conversation: serializeConversation({
+        ...conversation,
+        totalMessageCount: messageCount,
+        hasFailedMessages: blockedMessages.length > 0,
+        hasMetaDeliveryLimitedMessages: blockedMessages.some((message) =>
+          isMetaDeliveryLimitError([message.failureReason, message.metadata])
+        )
+      }),
+      messages: messages.reverse().map(serializeMessage)
+    });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}

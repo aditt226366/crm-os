@@ -1,0 +1,43 @@
+import { NextRequest } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { json } from "@/lib/api";
+import { requireActiveTenant } from "@/lib/guards";
+import { INTEGRATION_TYPES } from "@/lib/constants";
+import { integrationErrorResponse } from "@/lib/integrations/responses";
+
+export async function GET(request: NextRequest) {
+  let companyId = "unknown";
+  try {
+    const user = await requireActiveTenant(request);
+    companyId = user.tenantId ?? "unknown";
+    const integrations = await prisma.integration.findMany({
+      where: { tenantId: user.tenantId!, type: { in: [...INTEGRATION_TYPES] } },
+      select: {
+        type: true,
+        status: true,
+        lastVerifiedAt: true,
+        lastVerificationError: true
+      },
+      orderBy: { type: "asc" }
+    });
+
+    const byType = new Map(integrations.map((integration) => [integration.type, integration]));
+    return json({
+      integrations: INTEGRATION_TYPES.map((type) => {
+        const integration = byType.get(type);
+        return {
+          type,
+          status: integration?.status ?? "NOT_CONNECTED",
+          connected: integration?.status === "CONNECTED",
+          lastVerifiedAt: integration?.lastVerifiedAt?.toISOString() ?? null,
+          lastVerificationError: integration?.lastVerificationError ?? null
+        };
+      })
+    });
+  } catch (error) {
+    return integrationErrorResponse(error, {
+      route: request.nextUrl.pathname,
+      companyId
+    });
+  }
+}

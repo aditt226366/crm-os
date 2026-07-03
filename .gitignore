@@ -1,0 +1,16 @@
+node_modules
+.next
+out
+dist
+.env
+.env*.local
+.data/
+!.env.example
+.npm-cache
+*.tsbuildinfo
+design-qa.md
+playwright-report
+test-results
+artifacts
+next-dev.log
+next-dev.err.log

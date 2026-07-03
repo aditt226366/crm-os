@@ -1,0 +1,357 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #030712;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  background: #030712;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(14, 165, 233, 0.11), transparent 30rem),
+    #030712;
+  color: #f8fafc;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.32);
+  color: white;
+}
+
+.glass-panel {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025)),
+    rgba(3, 7, 18, 0.58);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(22px);
+}
+
+.glass-panel::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(120deg, rgba(34, 211, 238, 0.2), transparent 28%, rgba(37, 99, 235, 0.18) 62%, transparent);
+  opacity: 0.7;
+}
+
+.animated-border {
+  position: relative;
+}
+
+.animated-border::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(110deg, transparent, rgba(34, 211, 238, 0.45), transparent, rgba(59, 130, 246, 0.36), transparent);
+  background-size: 220% 100%;
+  opacity: 0.42;
+  animation: borderFlow 8s linear infinite;
+}
+
+.section-shell {
+  position: relative;
+  z-index: 10;
+  width: min(1180px, calc(100% - 32px));
+  margin-inline: auto;
+}
+
+.orb-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.grid-mask {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.055) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(circle at center, black, transparent 76%);
+}
+
+/* Light public site theme (landing, login, request demo, about, products, pricing).
+   Scoped so the admin/app panels are unaffected. */
+.theme-light {
+  color-scheme: light;
+}
+
+.theme-light ::selection {
+  background: rgba(37, 211, 102, 0.24);
+  color: #04140b;
+}
+
+.wa-glow {
+  background: radial-gradient(58% 55% at 50% 0%, rgba(37, 211, 102, 0.14), transparent 70%);
+}
+
+.wa-dots {
+  background-image: radial-gradient(rgba(15, 23, 42, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.chat-wallpaper {
+  background-color: #efeae2;
+  background-image: radial-gradient(rgba(0, 0, 0, 0.035) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* ---------------------------------------------------------------------------
+   Light variant contrast. Pure white on white reads flat, so give the page a
+   soft off-white base while cards stay white (they now carry a shadow), make
+   the alternating section bands clearly visible, and firm up hairline borders.
+   Scoped to light mode only.
+--------------------------------------------------------------------------- */
+html:not([data-wa-theme="dark"]) .theme-light {
+  background-color: #f1f4f3;
+}
+html:not([data-wa-theme="dark"]) .theme-light .bg-neutral-50 {
+  background-color: #e7edeb;
+}
+html:not([data-wa-theme="dark"]) .theme-light .border-neutral-200 {
+  border-color: #d6dcda;
+}
+html:not([data-wa-theme="dark"]) .theme-light .border-neutral-300 {
+  border-color: #c7cfcc;
+}
+
+/* ---------------------------------------------------------------------------
+   Dark variant for the public site. Toggled via <html data-wa-theme="dark">
+   and scoped to `.theme-light` subtrees, so it re-maps the light palette to a
+   dark one without touching any component markup — and never affects the
+   admin/app panels (which have no `.theme-light` wrapper).
+--------------------------------------------------------------------------- */
+html[data-wa-theme="dark"] .theme-light {
+  background-color: #0b0f0e;
+  color: #e8eceb;
+}
+html[data-wa-theme="dark"] .theme-light ::selection {
+  background: rgba(37, 211, 102, 0.3);
+  color: #eafff1;
+}
+
+/* Surfaces */
+html[data-wa-theme="dark"] .theme-light .bg-white { background-color: #121815; }
+html[data-wa-theme="dark"] .theme-light .bg-neutral-50 { background-color: #0f1512; }
+html[data-wa-theme="dark"] .theme-light .bg-neutral-100 { background-color: #1b2320; }
+html[data-wa-theme="dark"] .theme-light .hover\:bg-neutral-50:hover { background-color: #171e1b; }
+html[data-wa-theme="dark"] .theme-light .hover\:bg-neutral-100:hover { background-color: #1f2723; }
+
+/* Text */
+html[data-wa-theme="dark"] .theme-light .text-neutral-900 { color: #f2f5f4; }
+html[data-wa-theme="dark"] .theme-light .text-neutral-800 { color: #e6ebe9; }
+html[data-wa-theme="dark"] .theme-light .text-neutral-700 { color: #d2d9d6; }
+html[data-wa-theme="dark"] .theme-light .text-neutral-600 { color: #a6afab; }
+html[data-wa-theme="dark"] .theme-light .text-neutral-500 { color: #8a938f; }
+html[data-wa-theme="dark"] .theme-light .text-neutral-400 { color: #6c746f; }
+html[data-wa-theme="dark"] .theme-light .hover\:text-neutral-900:hover { color: #f2f5f4; }
+html[data-wa-theme="dark"] .theme-light .text-wa-accent { color: #34d97a; }
+
+/* Borders */
+html[data-wa-theme="dark"] .theme-light .border-neutral-200 { border-color: #232b28; }
+html[data-wa-theme="dark"] .theme-light .border-neutral-300 { border-color: #2b332f; }
+html[data-wa-theme="dark"] .theme-light .hover\:border-neutral-300:hover { border-color: #333c38; }
+html[data-wa-theme="dark"] .theme-light .hover\:border-neutral-400:hover { border-color: #3c453f; }
+
+/* Inputs / placeholders */
+html[data-wa-theme="dark"] .theme-light .placeholder\:text-neutral-400::placeholder { color: #6c746f; }
+
+/* Error box */
+html[data-wa-theme="dark"] .theme-light .bg-red-50 { background-color: rgba(239, 68, 68, 0.12); }
+html[data-wa-theme="dark"] .theme-light .border-red-200 { border-color: rgba(239, 68, 68, 0.32); }
+html[data-wa-theme="dark"] .theme-light .text-red-700 { color: #fca5a5; }
+
+/* Chat demo → WhatsApp dark mode */
+html[data-wa-theme="dark"] .theme-light .chat-wallpaper {
+  background-color: #0b141a;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+}
+html[data-wa-theme="dark"] .theme-light .chat-wallpaper .bg-white { background-color: #202c33; }
+html[data-wa-theme="dark"] .theme-light .bg-\[\#d9fdd3\] { background-color: #005c4b; }
+
+/* Dot pattern */
+html[data-wa-theme="dark"] .theme-light .wa-dots {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+}
+
+/* ---------------------------------------------------------------------------
+   Admin panel → light / WhatsApp-green theme (matches the public landing page).
+   Scoped to `.admin-light` so the company-user `/app` panels (which share the
+   same GlassCard / StatusBadge / Button components) keep their existing look.
+   This re-maps the admin's dark slate/cyan palette to neutral + wa-green.
+--------------------------------------------------------------------------- */
+
+/* Page background + ambient glow per theme */
+.admin-shell.admin-dark {
+  background-color: #030712;
+  color: #f8fafc;
+}
+.admin-shell.admin-light {
+  background-color: #e9edeb;
+  color: #171717;
+}
+.admin-shell.admin-dark .admin-glow {
+  background:
+    radial-gradient(circle at 20% 12%, rgba(34, 211, 238, 0.12), transparent 28rem),
+    radial-gradient(circle at 85% 10%, rgba(37, 99, 235, 0.10), transparent 30rem);
+}
+.admin-shell.admin-light .admin-glow {
+  background: radial-gradient(60% 40% at 50% 0%, rgba(37, 211, 102, 0.08), transparent 60%);
+}
+
+.admin-light {
+  color-scheme: light;
+  color: #171717;
+}
+.admin-light ::selection {
+  background: rgba(37, 211, 102, 0.24);
+  color: #04140b;
+}
+
+/* Cards (GlassCard) → clean white cards */
+.admin-light .glass-panel {
+  background: #ffffff;
+  border: 1px solid #d3dad7;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 10px 24px rgba(16, 24, 40, 0.07);
+  backdrop-filter: none;
+}
+.admin-light .glass-panel::before {
+  display: none;
+}
+
+/* Surfaces */
+.admin-light .bg-slate-950\/72 { background-color: #ffffff; }
+.admin-light .bg-slate-950\/70,
+.admin-light .bg-slate-950\/50,
+.admin-light .bg-slate-950\/40 { background-color: #eef2f0; }
+.admin-light .bg-slate-800 { background-color: #d6ddda; }
+.admin-light .bg-cyan-300 { background-color: #25d366; }
+.admin-light .bg-cyan-200 { background-color: #25d366; }
+.admin-light .bg-cyan-300\/10 { background-color: rgba(37, 211, 102, 0.12); }
+.admin-light .bg-white\/\[0\.03\] { background-color: #f3f6f4; }
+.admin-light .bg-white\/\[0\.035\],
+.admin-light .bg-white\/\[0\.04\],
+.admin-light .bg-white\/\[0\.05\] { background-color: #eef2f0; }
+
+/* Text */
+.admin-light .text-white,
+.admin-light .text-slate-100 { color: #171717; }
+.admin-light .text-slate-200 { color: #262626; }
+.admin-light .text-slate-300 { color: #404040; }
+.admin-light .text-slate-400 { color: #525252; }
+.admin-light .text-slate-500 { color: #737373; }
+.admin-light .text-slate-600 { color: #a3a3a3; }
+.admin-light .text-cyan-100,
+.admin-light .text-cyan-200,
+.admin-light .text-cyan-200\/80,
+.admin-light .text-cyan-100\/80 { color: #0a7c3e; }
+.admin-light .text-emerald-100 { color: #047857; }
+.admin-light .text-rose-100 { color: #be123c; }
+.admin-light .text-amber-100 { color: #b45309; }
+.admin-light .text-blue-100 { color: #1d4ed8; }
+
+/* Borders */
+.admin-light .border-white\/10 { border-color: #d6ddda; }
+.admin-light .border-white\/5 { border-color: #e4e8e6; }
+.admin-light .border-white\/15 { border-color: #cbd2cf; }
+.admin-light .border-cyan-300\/20,
+.admin-light .border-cyan-300\/30 { border-color: rgba(37, 211, 102, 0.30); }
+
+/* Chart tracks */
+.admin-light .stroke-white\/10 { stroke: #d6ddda; }
+.admin-light .bg-white\/10 { background-color: #d6ddda; }
+
+/* Shadows — drop the cyan neon glows for a flat, minimal look */
+.admin-light .shadow-glow { box-shadow: 0 4px 20px rgba(37, 211, 102, 0.14); }
+.admin-light [class*="shadow-\["] { box-shadow: none; }
+
+/* Hover states */
+.admin-light .hover\:bg-white:hover { background-color: #1da851; }
+.admin-light .hover\:text-white:hover { color: #171717; }
+.admin-light .hover\:bg-cyan-300\/10:hover { background-color: rgba(37, 211, 102, 0.10); }
+.admin-light .hover\:bg-white\/\[0\.05\]:hover,
+.admin-light .hover\:bg-white\/\[0\.06\]:hover { background-color: #eef1f0; }
+.admin-light .hover\:border-cyan-300\/30:hover,
+.admin-light .hover\:border-cyan-300\/40:hover,
+.admin-light .hover\:border-cyan-300\/50:hover { border-color: rgba(37, 211, 102, 0.45); }
+.admin-light .hover\:shadow-glow:hover { box-shadow: 0 6px 22px rgba(37, 211, 102, 0.16); }
+.admin-light .focus-visible\:ring-cyan-300:focus-visible { --tw-ring-color: rgba(37, 211, 102, 0.55); }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.62) rgba(15, 23, 42, 0.7);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid rgba(15, 23, 42, 0.72);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.88), rgba(37, 99, 235, 0.78));
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(103, 232, 249, 0.95), rgba(59, 130, 246, 0.9));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}

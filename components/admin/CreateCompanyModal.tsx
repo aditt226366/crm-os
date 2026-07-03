@@ -1,0 +1,213 @@
+"use client";
+
+import { FormEvent, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { NeonButton } from "@/components/shared/NeonButton";
+import {
+  COMPANY_LOGIN_PASSWORD_MAX_LENGTH,
+  COMPANY_LOGIN_PASSWORD_MAX_MESSAGE,
+  COMPANY_LOGIN_PASSWORD_MESSAGE,
+  COMPANY_LOGIN_USERNAME_MESSAGE,
+  isCompanyLoginPasswordValid,
+  isCompanyLoginUsernameValid
+} from "@/lib/credential-policy";
+
+type SuccessPayload = {
+  company: { id: string; name: string; slug: string };
+  loginUsername: string;
+  temporaryPassword: string;
+  loginUrl: string;
+  warning: string;
+};
+
+type ErrorPayload = {
+  error?: {
+    message?: string;
+    issues?: Array<{ message?: string }>;
+  };
+  message?: string;
+};
+
+function errorMessage(data: ErrorPayload) {
+  return data.error?.issues?.[0]?.message ?? data.error?.message ?? data.message ?? "Could not create company";
+}
+
+const companySlugPattern = /^[a-z0-9-]+$/;
+const companySlugMessage = "Company slug can use lowercase letters, numbers, and hyphens only.";
+
+function formString(payload: Record<string, FormDataEntryValue>, name: string) {
+  const value = payload[name];
+  return typeof value === "string" ? value : "";
+}
+
+function validateCreateCompanyPayload(payload: Record<string, FormDataEntryValue>) {
+  const companyName = formString(payload, "companyName");
+  const slug = formString(payload, "slug");
+  const ownerName = formString(payload, "ownerName");
+  const loginUsername = formString(payload, "loginUsername");
+  const temporaryPassword = formString(payload, "temporaryPassword");
+
+  if (!companyName.trim()) {
+    return "Company Name is required.";
+  }
+
+  if (!slug.trim()) {
+    return "Company Slug is required.";
+  }
+
+  if (!companySlugPattern.test(slug)) {
+    return companySlugMessage;
+  }
+
+  if (!ownerName.trim()) {
+    return "Owner Name is required.";
+  }
+
+  if (!loginUsername.trim()) {
+    return "Login Username is required";
+  }
+
+  if (!isCompanyLoginUsernameValid(loginUsername)) {
+    return COMPANY_LOGIN_USERNAME_MESSAGE;
+  }
+
+  if (temporaryPassword.length > COMPANY_LOGIN_PASSWORD_MAX_LENGTH) {
+    return COMPANY_LOGIN_PASSWORD_MAX_MESSAGE;
+  }
+
+  if (temporaryPassword.length > 0 && !isCompanyLoginPasswordValid(temporaryPassword)) {
+    return COMPANY_LOGIN_PASSWORD_MESSAGE;
+  }
+
+  return null;
+}
+
+export function CreateCompanyModal({
+  open,
+  onClose,
+  onCreated
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState<SuccessPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      const form = new FormData(event.currentTarget);
+      const payload = Object.fromEntries(form.entries());
+      const validationError = validateCreateCompanyPayload(payload);
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+
+      const response = await fetch("/api/admin/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = (await response.json().catch(() => ({}))) as SuccessPayload & ErrorPayload;
+
+      if (!response.ok) {
+        setError(errorMessage(data));
+        return;
+      }
+
+      setSuccess(data);
+      onCreated();
+    } catch {
+      setError("Could not reach the company API. Check the server and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function close() {
+    setSuccess(null);
+    setError(null);
+    onClose();
+  }
+
+  return (
+    <AnimatePresence>
+      {open ? (
+        <motion.div className="fixed inset-0 z-[90] overflow-y-auto bg-slate-950/72 p-4 backdrop-blur-xl" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+          <div className="mx-auto flex min-h-full max-w-2xl items-center">
+            <motion.div className="glass-panel w-full rounded-[30px] p-6" initial={{ y: 22, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 22, opacity: 0 }}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-semibold text-white">Create Company</h2>
+                  <p className="mt-2 text-sm text-slate-400">Create a tenant, owner user, default features, and integration shells.</p>
+                </div>
+                <button onClick={close} className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-300">Close</button>
+              </div>
+
+              {success ? (
+                <div className="mt-6 rounded-[24px] border border-cyan-300/30 bg-cyan-300/10 p-5">
+                  <p className="text-lg font-semibold text-white">{success.company.name} is ready</p>
+                  <div className="mt-4 space-y-2 text-sm text-slate-200">
+                    <p>Login URL: <span className="text-cyan-100">{success.loginUrl}</span></p>
+                    <p>Login Username: <span className="font-semibold text-white">{success.loginUsername}</span></p>
+                    <p>Temporary password: <span className="font-semibold text-white">{success.temporaryPassword}</span></p>
+                    <p className="text-amber-100">{success.warning}</p>
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={submit} noValidate className="mt-6 grid gap-3 sm:grid-cols-2">
+                  {[
+                    ["companyName", "Company Name"],
+                    ["slug", "Company Slug"],
+                    ["ownerName", "Owner Name"],
+                    ["loginUsername", "Login Username"],
+                    ["temporaryPassword", "Temporary Password"],
+                    ["phoneNumber", "Phone Number optional"]
+                  ].map(([name, label]) => (
+                    <input
+                      key={name}
+                      name={name}
+                      placeholder={label}
+                      type={name === "temporaryPassword" ? "password" : "text"}
+                      required={name !== "phoneNumber" && name !== "temporaryPassword"}
+                      autoComplete={name === "temporaryPassword" ? "new-password" : "off"}
+                      pattern={name === "slug" ? "[a-z0-9-]+" : name === "loginUsername" ? "[A-Za-z0-9._-]+" : undefined}
+                      minLength={name === "temporaryPassword" ? 8 : undefined}
+                      maxLength={name === "temporaryPassword" ? COMPANY_LOGIN_PASSWORD_MAX_LENGTH : undefined}
+                      title={
+                        name === "slug"
+                          ? companySlugMessage
+                          : name === "loginUsername"
+                            ? COMPANY_LOGIN_USERNAME_MESSAGE
+                            : name === "temporaryPassword"
+                              ? COMPANY_LOGIN_PASSWORD_MESSAGE
+                              : undefined
+                      }
+                      className="h-12 rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm text-white outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
+                    />
+                  ))}
+                  <select name="plan" defaultValue="STARTER" className="h-12 rounded-2xl border border-white/10 bg-slate-950 px-4 text-sm text-white outline-none">
+                    <option value="STARTER">Starter</option>
+                    <option value="PRO">Pro</option>
+                    <option value="ENTERPRISE">Enterprise</option>
+                  </select>
+                  <select name="status" defaultValue="ACTIVE" className="h-12 rounded-2xl border border-white/10 bg-slate-950 px-4 text-sm text-white outline-none">
+                    <option value="ACTIVE">Active</option>
+                    <option value="DEACTIVATED">Deactivated</option>
+                  </select>
+                  {error ? <p className="sm:col-span-2 rounded-2xl border border-rose-300/20 bg-rose-300/10 px-4 py-3 text-sm text-rose-100">{error}</p> : null}
+                  <NeonButton loading={loading} className="sm:col-span-2">Create Company</NeonButton>
+                </form>
+              )}
+            </motion.div>
+          </div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  );
+}
