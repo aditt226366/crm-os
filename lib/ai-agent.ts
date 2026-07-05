@@ -143,17 +143,22 @@ async function loadKnowledgeContext({
   config: IntegrationConfig;
 }) {
   await ensureLeadWorkspaceSchema();
+  const topK = Math.min(Math.max(Number(config.KNOWLEDGE_TOP_K ?? 5) || 5, 1), 8);
   const [documents, chunks] = await Promise.all([
     prisma.knowledgeDocument.findMany({
       where: { tenantId, status: { in: ["UPLOADED", "PROCESSING", "INDEXED"] } },
+      select: {
+        title: true,
+        type: true,
+        status: true
+      },
       orderBy: { updatedAt: "desc" },
       take: 6
     }),
     prisma.knowledgeChunk.findMany({
       where: { tenantId },
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      include: {
+      select: {
+        content: true,
         document: {
           select: {
             title: true,
@@ -161,7 +166,9 @@ async function loadKnowledgeContext({
             status: true
           }
         }
-      }
+      },
+      orderBy: { createdAt: "desc" },
+      take: topK
     })
   ]);
 
@@ -220,9 +227,30 @@ export async function handleAiAgentInboundReply({
   await ensureLeadWorkspaceSchema();
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, tenantId },
-    include: {
-      contact: true,
-      messages: { orderBy: { createdAt: "desc" }, take: 10 }
+    select: {
+      id: true,
+      aiRepliesStopped: true,
+      contactId: true,
+      contact: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          optOut: true,
+          leadTemperature: true,
+          customerReplyCount: true
+        }
+      },
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        select: {
+          direction: true,
+          body: true,
+          type: true,
+          createdAt: true
+        }
+      }
     }
   });
 
@@ -231,9 +259,18 @@ export async function handleAiAgentInboundReply({
   }
 
   const [whatsappIntegration, aiIntegration, knowledgeIntegration] = await Promise.all([
-    prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } } }),
-    prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "AI_MODEL" } } }),
-    prisma.integration.findUnique({ where: { tenantId_type: { tenantId, type: "KNOWLEDGE_BASE" } } })
+    prisma.integration.findUnique({
+      where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } },
+      select: { status: true, encryptedConfig: true }
+    }),
+    prisma.integration.findUnique({
+      where: { tenantId_type: { tenantId, type: "AI_MODEL" } },
+      select: { status: true, encryptedConfig: true }
+    }),
+    prisma.integration.findUnique({
+      where: { tenantId_type: { tenantId, type: "KNOWLEDGE_BASE" } },
+      select: { status: true, encryptedConfig: true }
+    })
   ]);
 
   if (whatsappIntegration?.status !== "CONNECTED" || aiIntegration?.status !== "CONNECTED") {

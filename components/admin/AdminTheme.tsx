@@ -21,9 +21,11 @@ export function AdminThemeProvider({ children }: { children: React.ReactNode }) 
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
-    if (stored === "light" || stored === "dark") setTheme(stored);
-    setHydrated(true);
+    queueMicrotask(() => {
+      const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
+      if (stored === "light" || stored === "dark") setTheme(stored);
+      setHydrated(true);
+    });
   }, []);
 
   useEffect(() => {

@@ -26,9 +26,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // remounted on client navigation between pages), so it restores the theme
   // when you move between pages.
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
-    if (stored === "light" || stored === "dark") setTheme(stored);
-    setHydrated(true);
+    queueMicrotask(() => {
+      const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
+      if (stored === "light" || stored === "dark") setTheme(stored);
+      setHydrated(true);
+    });
   }, []);
 
   // Persist + reflect on <html>, but never before we've read the stored value

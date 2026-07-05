@@ -12,6 +12,47 @@ export function normalizePhone(phone: string) {
   return normalizePhoneE164(phone);
 }
 
+function compactAttachment(attachment: unknown) {
+  if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return null;
+  const record = attachment as Record<string, unknown>;
+  const hasDataUrl = typeof record.dataUrl === "string" && record.dataUrl.length > 0;
+  return {
+    id: typeof record.id === "string" ? record.id : undefined,
+    whatsappMediaId: typeof record.whatsappMediaId === "string" ? record.whatsappMediaId : undefined,
+    fileName: typeof record.fileName === "string" ? record.fileName : undefined,
+    name: typeof record.name === "string" ? record.name : undefined,
+    mimeType: typeof record.mimeType === "string" ? record.mimeType : undefined,
+    size: typeof record.size === "number" ? record.size : undefined,
+    url: typeof record.url === "string" ? record.url : undefined,
+    mediaKind: typeof record.mediaKind === "string" ? record.mediaKind : undefined,
+    downloadError: typeof record.downloadError === "string" ? record.downloadError : undefined,
+    storageNote:
+      typeof record.storageNote === "string"
+        ? record.storageNote
+        : hasDataUrl
+          ? "Inline media preview omitted to reduce egress."
+          : undefined
+  };
+}
+
+function compactMessageMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const record = metadata as Record<string, unknown>;
+  const attachments = Array.isArray(record.attachments)
+    ? record.attachments.map(compactAttachment).filter(Boolean)
+    : undefined;
+
+  return {
+    ...(typeof record.source === "string" ? { source: record.source } : {}),
+    ...(typeof record.sourceId === "string" ? { sourceId: record.sourceId } : {}),
+    ...(record.metaDeliveryLimit && typeof record.metaDeliveryLimit === "object"
+      ? { metaDeliveryLimit: record.metaDeliveryLimit }
+      : {}),
+    ...(attachments?.length ? { attachments } : {}),
+    ...(record.whatsappMedia && typeof record.whatsappMedia === "object" ? { whatsappMedia: record.whatsappMedia } : {})
+  };
+}
+
 export function serializeMessage(message: {
   id: string;
   conversationId: string;
@@ -38,7 +79,7 @@ export function serializeMessage(message: {
     whatsappMessageId: message.whatsappMessageId,
     status: message.status,
     failureReason: message.failureReason,
-    metadata: message.metadata,
+    metadata: compactMessageMetadata(message.metadata),
     createdAt: message.createdAt.toISOString(),
     updatedAt: message.updatedAt.toISOString()
   };

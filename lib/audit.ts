@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { clientIp } from "@/lib/security";
+import { clientIp, scrubSecretsFromLogs } from "@/lib/security";
 
 type AuditLogInput = {
   request?: NextRequest;
@@ -13,6 +13,29 @@ type AuditLogInput = {
   oldValue?: unknown;
   newValue?: unknown;
 };
+
+const MAX_AUDIT_JSON_BYTES = 8 * 1024;
+
+function compactAuditValue(value: unknown) {
+  if (value === undefined) return undefined;
+  const scrubbed = scrubSecretsFromLogs(value);
+  try {
+    const raw = JSON.stringify(scrubbed);
+    const bytes = Buffer.byteLength(raw, "utf8");
+    if (bytes <= MAX_AUDIT_JSON_BYTES) {
+      return scrubbed as Prisma.InputJsonValue;
+    }
+    return {
+      truncated: true,
+      originalBytes: bytes,
+      preview: raw.slice(0, 1200)
+    } satisfies Prisma.InputJsonObject;
+  } catch {
+    return {
+      summary: String(scrubbed).slice(0, 1200)
+    } satisfies Prisma.InputJsonObject;
+  }
+}
 
 function auditLogData({
   request,
@@ -30,8 +53,8 @@ function auditLogData({
     action,
     entityType: entityType ?? null,
     entityId: entityId ?? null,
-    oldValue: oldValue === undefined ? undefined : (oldValue as Prisma.InputJsonValue),
-    newValue: newValue === undefined ? undefined : (newValue as Prisma.InputJsonValue),
+    oldValue: compactAuditValue(oldValue),
+    newValue: compactAuditValue(newValue),
     ipAddress: request ? clientIp(request.headers) : null,
     userAgent: request?.headers.get("user-agent") ?? null
   };
@@ -57,5 +80,5 @@ export async function safeCreateAuditLog(data: AuditLogInput | Prisma.AuditLogUn
 }
 
 export async function writeAuditLog(input: AuditLogInput) {
-  await prisma.auditLog.create({ data: auditLogData(input) });
+  await safeCreateAuditLog(input);
 }

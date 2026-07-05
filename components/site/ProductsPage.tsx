@@ -128,7 +128,7 @@ function ProductBlock({ product, index }: { product: Product; index: number }) {
           <p className="mt-4 text-base leading-8 text-neutral-600">{text}</p>
         </div>
         <div className={cn(cardClass, "h-fit p-7")}>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">What's inside</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">What&apos;s inside</p>
           <ul className="mt-4 space-y-3">
             {capabilities.map((c) => (
               <li key={c} className="flex items-start gap-3 text-sm leading-6 text-neutral-700">
@@ -201,7 +201,7 @@ export function ProductsPage() {
             Start with one. Grow into the whole suite.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-neutral-600">
-            Book a demo and we'll show you the products that fit your business first — and where the rest plug in later.
+            Book a demo and we&apos;ll show you the products that fit your business first — and where the rest plug in later.
           </p>
           <Link href="/request-demo" className={cn(primaryBtn, "mt-8")}>
             Request a demo

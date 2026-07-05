@@ -10,6 +10,7 @@ import { scrubSecretsFromLogs } from "@/lib/security";
 import { serializeIntegration } from "@/lib/serializers";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
+import { invalidateTenantIntegrationCache } from "@/lib/egress";
 import {
   defaultMaskedDisplay,
   encryptionConfigured,
@@ -148,6 +149,7 @@ export async function PATCH(request: NextRequest, context: Context) {
       oldValue: oldValue ? scrubSecretsFromLogs({ status: oldValue.status, maskedDisplay: oldValue.maskedDisplay, metadata: oldValue.metadata }) : null,
       newValue: scrubSecretsFromLogs({ type, status: integration.status, maskedDisplay: integration.maskedDisplay })
     });
+    invalidateTenantIntegrationCache(tenantId);
     return integrationSuccess({
       message: `${INTEGRATION_DEFINITIONS[type].name} saved securely`,
       integration: serializeIntegration(integration)

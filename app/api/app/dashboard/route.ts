@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireActiveTenant } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { money } from "@/lib/serializers";
+import { DASHBOARD_CACHE_TTL_MS, dashboardCache, getCache, setCache } from "@/lib/egress";
 
 function percent(part: number, total: number) {
   if (!total) {
@@ -81,9 +82,14 @@ function logDashboardError(error: unknown) {
 }
 
 export async function GET(request: NextRequest) {
+  const startedAt = Date.now();
   try {
     const user = await requireActiveTenant(request);
     const tenantId = user.tenantId!;
+    const cached = getCache(dashboardCache, tenantId);
+    if (cached) {
+      return json(cached, { egress: { route: request.nextUrl.pathname, tenantId, startedAt } });
+    }
     try {
     const now = new Date();
     const today = new Date(now);
@@ -201,7 +207,7 @@ export async function GET(request: NextRequest) {
     const outboundMessages = messagesSent;
     const totalConversationMessages = inboundMessages + outboundMessages;
 
-    return json({
+    const payload = {
       metrics: {
         totalLeads,
         hotLeads: temperatureCount("HOT"),
@@ -300,10 +306,14 @@ export async function GET(request: NextRequest) {
           createdAt: campaign.createdAt.toISOString()
         }))
       }
-    });
+    };
+    setCache(dashboardCache, tenantId, payload, DASHBOARD_CACHE_TTL_MS);
+    return json(payload, { egress: { route: request.nextUrl.pathname, tenantId, startedAt } });
     } catch (error) {
       logDashboardError(error);
-      return json(emptyDashboardPayload("Dashboard metrics could not fully load."));
+      return json(emptyDashboardPayload("Dashboard metrics could not fully load."), {
+        egress: { route: request.nextUrl.pathname, tenantId, startedAt }
+      });
     }
   } catch (error) {
     return errorResponse(error);

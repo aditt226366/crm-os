@@ -12,7 +12,10 @@
     "prisma:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "admin:create": "tsx prisma/create-admin.ts"
+    "admin:create": "tsx prisma/create-admin.ts",
+    "cleanup:logs": "tsx scripts/cleanup-logs.ts",
+    "cleanup:webhook-events": "tsx scripts/cleanup-webhook-events.ts",
+    "cleanup:debug": "tsx scripts/cleanup-debug.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.1",

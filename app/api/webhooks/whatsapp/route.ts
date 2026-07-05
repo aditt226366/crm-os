@@ -17,6 +17,7 @@ import {
   withMetaDeliveryLimitMetadata
 } from "@/lib/meta-delivery-limit";
 import { syncConversationWorkflowSignals } from "@/lib/conversation-workflow";
+import { invalidateTenantEgressCaches } from "@/lib/egress";
 
 const MAX_DATABASE_MEDIA_BYTES = 16 * 1024 * 1024;
 
@@ -172,11 +173,10 @@ async function inboundMediaMetadata({
         attachment.mimeType = downloaded.mimeType;
         attachment.size = downloaded.size;
         attachment.sha256 = downloaded.sha256 ?? attachment.sha256;
-        if (downloaded.bytes.byteLength <= MAX_DATABASE_MEDIA_BYTES) {
-          attachment.dataUrl = `data:${downloaded.mimeType};base64,${downloaded.bytes.toString("base64")}`;
-        } else {
-          attachment.storageNote = "Media is larger than the database preview limit.";
-        }
+        attachment.storageNote =
+          downloaded.bytes.byteLength > MAX_DATABASE_MEDIA_BYTES
+            ? "Media is larger than the database preview limit."
+            : "Media metadata stored without inline base64 preview to reduce egress.";
       }
     } catch (error) {
       attachment.downloadError = error instanceof Error ? error.message : "Unable to download WhatsApp media.";
@@ -293,7 +293,8 @@ async function resolveTenantId({
 
   const integrations = await prisma.integration.findMany({
     where: { type: "WHATSAPP_CLOUD", status: "CONNECTED" },
-    select: { tenantId: true, encryptedConfig: true }
+    select: { tenantId: true, encryptedConfig: true },
+    take: 100
   });
   const match = integrations.find((integration) => {
     const config = readEncryptedConfig(integration.encryptedConfig);
@@ -362,6 +363,7 @@ export async function POST(request: NextRequest) {
         scoring: result.scoring
       };
       if (!result.duplicate) {
+        invalidateTenantEgressCaches(tenantId);
         emitTenantEvent(tenantId, "message.created", payload);
         emitTenantEvent(tenantId, "conversation.updated", payload.conversation);
         emitTenantEvent(tenantId, "lead.temperature.updated", payload.scoring);
@@ -387,8 +389,14 @@ export async function POST(request: NextRequest) {
           const mapped = mapMetaStatus(status.status);
           if (!status.id || !mapped) continue;
           const message = await prisma.message.findFirst({
-            where: { whatsappMessageId: status.id },
-            include: { contact: { select: { customFields: true } } }
+            where: { tenantId, whatsappMessageId: status.id },
+            select: {
+              id: true,
+              tenantId: true,
+              contactId: true,
+              metadata: true,
+              contact: { select: { customFields: true } }
+            }
           });
           if (!message) continue;
           const failureReason = statusFailureReason(status);
@@ -406,6 +414,21 @@ export async function POST(request: NextRequest) {
                     metadata: withMetaDeliveryLimitMetadata(message.metadata, deliveryLimit) as Prisma.InputJsonValue
                   }
                 : {})
+            },
+            select: {
+              id: true,
+              conversationId: true,
+              contactId: true,
+              direction: true,
+              type: true,
+              body: true,
+              templateId: true,
+              whatsappMessageId: true,
+              status: true,
+              failureReason: true,
+              metadata: true,
+              createdAt: true,
+              updatedAt: true
             }
           });
           if (deliveryLimit) {
@@ -435,6 +458,7 @@ export async function POST(request: NextRequest) {
               status: sheetStatus
             });
           }
+          invalidateTenantEgressCaches(message.tenantId);
           emitTenantEvent(message.tenantId, "message.status.updated", serializeMessage(updated));
         }
 
@@ -474,6 +498,7 @@ export async function POST(request: NextRequest) {
             scoring: result.scoring
           };
           if (!result.duplicate) {
+            invalidateTenantEgressCaches(tenantId);
             emitTenantEvent(tenantId, "message.created", eventPayload);
             emitTenantEvent(tenantId, "conversation.updated", eventPayload.conversation);
             emitTenantEvent(tenantId, "lead.temperature.updated", eventPayload.scoring);

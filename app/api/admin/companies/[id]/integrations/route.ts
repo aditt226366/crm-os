@@ -41,6 +41,17 @@ export async function GET(request: NextRequest, context: Context) {
     );
     const integrations = await prisma.integration.findMany({
       where: { tenantId: id },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        maskedDisplay: true,
+        metadata: true,
+        lastVerifiedAt: true,
+        lastVerificationError: true,
+        updatedAt: true,
+        createdAt: true
+      },
       orderBy: { type: "asc" }
     });
     return integrationSuccess({

@@ -40,9 +40,22 @@ export async function GET(request: NextRequest) {
       prisma.tenant.findMany({
         orderBy: { createdAt: "desc" },
         take: 5,
-        include: {
-          users: { where: { role: "COMPANY_OWNER" }, take: 1 },
-          features: { where: { enabled: true } }
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          plan: true,
+          status: true,
+          createdAt: true,
+          users: {
+            where: { role: "COMPANY_OWNER" },
+            select: { email: true, username: true },
+            take: 1
+          },
+          features: {
+            where: { enabled: true },
+            select: { id: true }
+          }
         }
       }),
       prisma.auditLog.findMany({

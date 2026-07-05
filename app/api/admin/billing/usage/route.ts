@@ -4,6 +4,7 @@ import { requirePlatformAdmin } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { money } from "@/lib/serializers";
 import { parseFeatureKey } from "@/lib/validation";
+import { safeMetadataSummary } from "@/lib/egress";
 
 export async function GET(request: NextRequest) {
   try {
@@ -21,7 +22,20 @@ export async function GET(request: NextRequest) {
         status,
         featureKey: feature ? parseFeatureKey(feature) : undefined
       },
-      include: { tenant: true },
+      select: {
+        id: true,
+        createdAt: true,
+        tenantId: true,
+        featureKey: true,
+        provider: true,
+        eventType: true,
+        endpoint: true,
+        units: true,
+        status: true,
+        cost: true,
+        metadata: true,
+        tenant: { select: { name: true } }
+      },
       orderBy: { createdAt: "desc" },
       take: 100
     });
@@ -39,7 +53,7 @@ export async function GET(request: NextRequest) {
         units: row.units,
         status: row.status,
         cost: money(row.cost),
-        metadata: row.metadata
+        metadata: safeMetadataSummary(row.metadata)
       }))
     });
   } catch (error) {

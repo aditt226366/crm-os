@@ -58,15 +58,23 @@ export function Donut({
   const total = segments.reduce((sum, s) => sum + s.value, 0) || 1;
   const radius = (size - thickness) / 2;
   const circumference = 2 * Math.PI * radius;
-  let offset = 0;
+  const segmentsWithOffsets = segments.reduce<Array<DonutSegment & { length: number; offset: number }>>((rows, segment) => {
+    const offset = rows.reduce((sum, row) => sum + row.length, 0);
+    return [
+      ...rows,
+      {
+        ...segment,
+        length: (segment.value / total) * circumference,
+        offset
+      }
+    ];
+  }, []);
 
   return (
     <div className="relative grid place-items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
         <circle cx={size / 2} cy={size / 2} r={radius} fill="none" strokeWidth={thickness} className="stroke-white/10" />
-        {segments.map((seg, i) => {
-          const length = (seg.value / total) * circumference;
-          const node = (
+        {segmentsWithOffsets.map((seg, i) => (
             <circle
               key={i}
               cx={size / 2}
@@ -75,13 +83,10 @@ export function Donut({
               fill="none"
               stroke={seg.color}
               strokeWidth={thickness}
-              strokeDasharray={`${length} ${circumference - length}`}
-              strokeDashoffset={-offset}
+              strokeDasharray={`${seg.length} ${circumference - seg.length}`}
+              strokeDashoffset={-seg.offset}
             />
-          );
-          offset += length;
-          return node;
-        })}
+        ))}
       </svg>
       {centerLabel != null ? (
         <div className="absolute text-center">

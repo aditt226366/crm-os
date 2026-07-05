@@ -3,7 +3,8 @@ import { z } from "zod";
 import { requireFeature } from "@/lib/guards";
 import { errorResponse, json } from "@/lib/api";
 import { leadFlowSummary } from "@/lib/lead-flow";
-import { runGoogleSheetLeadFlowWithTenantLock, startLeadSheetAutoSyncScheduler } from "@/lib/lead-sheet-auto-sync";
+import { runGoogleSheetLeadFlowWithTenantLock } from "@/lib/lead-sheet-auto-sync";
+import { DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT, invalidateTenantEgressCaches, parseBoundedLimit } from "@/lib/egress";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,29 +15,46 @@ const leadFlowSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const startedAt = Date.now();
   try {
-    startLeadSheetAutoSyncScheduler();
     const { user } = await requireFeature(request, "LEAD_MANAGEMENT");
-    return json(await leadFlowSummary(user.tenantId!));
+    const tenantId = user.tenantId!;
+    const { searchParams } = request.nextUrl;
+    const limit = parseBoundedLimit({
+      searchParams,
+      defaultLimit: DEFAULT_LIST_LIMIT,
+      maxLimit: MAX_LIST_LIMIT
+    });
+    const payload = await leadFlowSummary(tenantId, {
+      limit,
+      cursor: searchParams.get("cursor"),
+      search: searchParams.get("search") ?? searchParams.get("q"),
+      status: searchParams.get("status"),
+      leadTemperature: searchParams.get("leadTemperature") ?? searchParams.get("temperature"),
+      source: searchParams.get("source")
+    });
+    return json(payload, { egress: { route: request.nextUrl.pathname, tenantId, startedAt } });
   } catch (error) {
     return errorResponse(error);
   }
 }
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
   try {
-    startLeadSheetAutoSyncScheduler();
     const { user } = await requireFeature(request, "LEAD_MANAGEMENT");
+    const tenantId = user.tenantId!;
     const body = leadFlowSchema.parse(await request.json().catch(() => ({})));
     const result = await runGoogleSheetLeadFlowWithTenantLock({
-      tenantId: user.tenantId!,
+      tenantId,
       userId: user.id,
       range: body.range || undefined,
       maxRows: body.maxRows
     });
-    const summary = await leadFlowSummary(user.tenantId!);
+    invalidateTenantEgressCaches(tenantId);
+    const summary = await leadFlowSummary(tenantId);
 
-    return json({ ok: true, result, ...summary });
+    return json({ ok: true, result, ...summary }, { egress: { route: request.nextUrl.pathname, tenantId, startedAt } });
   } catch (error) {
     return errorResponse(error);
   }

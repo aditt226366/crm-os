@@ -9,6 +9,7 @@ import { recordUsage } from "@/lib/usage";
 import { writeAuditLog } from "@/lib/audit";
 import { readEncryptedConfig } from "@/lib/integration-vault";
 import { sendWhatsAppTextMessage } from "@/lib/whatsapp-cloud";
+import { invalidateTenantEgressCaches } from "@/lib/egress";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -85,6 +86,7 @@ export async function POST(request: NextRequest, context: Context) {
       conversation: serializeConversation(result.conversation),
       message: serializeMessage(result.message)
     };
+    invalidateTenantEgressCaches(tenantId);
     emitTenantEvent(tenantId, "message.created", payload);
     emitTenantEvent(tenantId, "conversation.updated", payload.conversation);
 

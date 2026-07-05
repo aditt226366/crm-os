@@ -14,7 +14,25 @@ export async function GET(request: NextRequest) {
     await ensureIntegrationSchema();
     const integrations = await prisma.integration.findMany({
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
-      include: { tenant: true },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        maskedDisplay: true,
+        metadata: true,
+        lastVerifiedAt: true,
+        lastVerificationError: true,
+        updatedAt: true,
+        createdAt: true,
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            plan: true
+          }
+        }
+      },
       take: 200
     });
     return json({

@@ -106,6 +106,9 @@ type InboxFilter = (typeof filters)[number][0];
 
 const confirmedOrderStatuses = new Set(["CONFIRMED", "DISPATCHED", "COMPLETED"]);
 const emojiOptions = ["😀", "😂", "😊", "😍", "👍", "🙏", "🔥", "🎉", "✅", "❤️", "👌", "🤝", "😎", "😇", "🙌", "💯"];
+const INBOX_LIST_POLL_MS = 30_000;
+const SELECTED_CONVERSATION_POLL_MS = 15_000;
+const IDLE_POLL_PAUSE_MS = 2 * 60_000;
 
 function relativeTime(value: string | null) {
   if (!value) return "";
@@ -657,6 +660,8 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [query, setQuery] = useState(initialSearch);
   const [loadingList, setLoadingList] = useState(true);
@@ -665,6 +670,8 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadCardRef = useRef<HTMLDivElement | null>(null);
+  const lastConversationSyncRef = useRef<string | null>(null);
+  const lastActivityRef = useRef(0);
 
   const visibleConversations = useMemo(
     () => conversations.filter((conversation) => matchesActiveFilter(conversation, filter)),
@@ -680,42 +687,94 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     return new Date(selected.customerServiceWindowExpiresAt) < new Date();
   }, [selected]);
 
-  const loadConversations = useCallback(async (nextSelectedId?: string | null) => {
-    setLoadingList(true);
+  const loadConversations = useCallback(async (nextSelectedId?: string | null, options: { delta?: boolean } = {}) => {
+    const delta = Boolean(options.delta && lastConversationSyncRef.current);
+    if (!delta) setLoadingList(true);
     try {
-      const response = await fetch(`/api/app/inbox/conversations?filter=${filter}&q=${encodeURIComponent(query)}`);
-      if (!response.ok) throw new Error("Unable to load conversations");
-      const data = (await response.json()) as { conversations: Conversation[] };
-      setConversations(data.conversations);
-      setSelectedId((current) => {
-        const preferred = nextSelectedId ?? current;
-        if (preferred && data.conversations.some((conversation) => conversation.id === preferred)) {
-          return preferred;
-        }
-        return data.conversations[0]?.id ?? null;
+      const params = new URLSearchParams({
+        filter,
+        q: query,
+        limit: "25"
       });
+      if (delta && lastConversationSyncRef.current) {
+        params.set("since", lastConversationSyncRef.current);
+      }
+      const response = await fetch(`/api/app/inbox/conversations?${params.toString()}`);
+      if (!response.ok) throw new Error("Unable to load conversations");
+      const data = (await response.json()) as { conversations: Conversation[]; sync?: { since?: string } };
+      lastConversationSyncRef.current = data.sync?.since ?? new Date().toISOString();
+      if (delta) {
+        setConversations((current) =>
+          data.conversations.reduce((rows, conversation) => upsertConversation(rows, conversation), current)
+        );
+      } else {
+        setConversations(data.conversations);
+        setSelectedId((current) => {
+          const preferred = nextSelectedId ?? current;
+          if (preferred && data.conversations.some((conversation) => conversation.id === preferred)) {
+            return preferred;
+          }
+          return data.conversations[0]?.id ?? null;
+        });
+      }
     } catch (conversationError) {
       setError(conversationError instanceof Error ? conversationError.message : "Unable to load conversations");
     } finally {
-      setLoadingList(false);
+      if (!delta) setLoadingList(false);
     }
   }, [filter, query]);
 
-  const loadConversation = useCallback(async (conversationId: string) => {
-    setLoadingThread(true);
+  const loadConversation = useCallback(async (conversationId: string, options: { scrollToBottom?: boolean; quiet?: boolean } = {}) => {
+    const shouldScrollToBottom = options.scrollToBottom ?? true;
+    if (!options.quiet) setLoadingThread(true);
     try {
-      const response = await fetch(`/api/app/inbox/conversations/${conversationId}`);
+      const response = await fetch(`/api/app/inbox/conversations/${conversationId}?limit=50`);
       if (!response.ok) throw new Error("Unable to load conversation");
-      const data = (await response.json()) as { conversation: Conversation; messages: Message[] };
+      const data = (await response.json()) as {
+        conversation: Conversation;
+        messages: Message[];
+        pagination?: { hasMoreOlderMessages?: boolean };
+      };
       setConversations((current) => upsertConversation(current, data.conversation));
       setMessages(data.messages);
-      setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }), 0);
+      setHasMoreOlderMessages(Boolean(data.pagination?.hasMoreOlderMessages));
+      if (shouldScrollToBottom) {
+        setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }), 0);
+      }
     } catch (conversationError) {
       setError(conversationError instanceof Error ? conversationError.message : "Unable to load conversation");
     } finally {
-      setLoadingThread(false);
+      if (!options.quiet) setLoadingThread(false);
     }
   }, []);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!selectedId || !hasMoreOlderMessages || loadingOlder || !messages.length) return;
+    const before = messages[0]?.createdAt;
+    if (!before) return;
+    const scrollElement = scrollRef.current;
+    const previousHeight = scrollElement?.scrollHeight ?? 0;
+    setLoadingOlder(true);
+    try {
+      const params = new URLSearchParams({ before, limit: "50" });
+      const response = await fetch(`/api/app/inbox/conversations/${selectedId}/messages?${params.toString()}`);
+      if (!response.ok) throw new Error("Unable to load older messages");
+      const data = (await response.json()) as { messages: Message[]; hasMore: boolean };
+      setMessages((current) => {
+        const existing = new Set(current.map((message) => message.id));
+        return [...data.messages.filter((message) => !existing.has(message.id)), ...current];
+      });
+      setHasMoreOlderMessages(data.hasMore);
+      window.setTimeout(() => {
+        if (!scrollElement) return;
+        scrollElement.scrollTop = scrollElement.scrollHeight - previousHeight;
+      }, 0);
+    } catch (olderError) {
+      setError(olderError instanceof Error ? olderError.message : "Unable to load older messages");
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [hasMoreOlderMessages, loadingOlder, messages, selectedId]);
 
   useEffect(() => {
     const timeout = setTimeout(() => loadConversations(), 180);
@@ -734,6 +793,34 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   }, [loadConversation, selected?.id]);
 
   useEffect(() => {
+    const markActive = () => {
+      lastActivityRef.current = Date.now();
+    };
+    markActive();
+    const events: Array<keyof WindowEventMap> = ["focus", "mousemove", "keydown", "pointerdown", "touchstart"];
+    events.forEach((event) => window.addEventListener(event, markActive, { passive: true }));
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      if (Date.now() - lastActivityRef.current > IDLE_POLL_PAUSE_MS) return;
+      void loadConversations(null, { delta: true });
+    }, INBOX_LIST_POLL_MS);
+    return () => {
+      events.forEach((event) => window.removeEventListener(event, markActive));
+      window.clearInterval(interval);
+    };
+  }, [loadConversations]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      if (Date.now() - lastActivityRef.current > IDLE_POLL_PAUSE_MS) return;
+      void loadConversation(selectedId, { scrollToBottom: false, quiet: true });
+    }, SELECTED_CONVERSATION_POLL_MS);
+    return () => window.clearInterval(interval);
+  }, [loadConversation, selectedId]);
+
+  useEffect(() => {
     const events = new EventSource("/api/app/inbox/events");
     events.addEventListener("message.created", (event) => {
       const data = JSON.parse((event as MessageEvent).data) as { payload: { conversation: Conversation; message: Message } };
@@ -741,9 +828,6 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
       setMessages((current) =>
         data.payload.message.conversationId === selectedId ? upsertMessage(current, data.payload.message) : current
       );
-      if (data.payload.message.conversationId === selectedId && data.payload.message.direction === "INBOUND") {
-        void loadConversation(selectedId);
-      }
       setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }), 0);
     });
     events.addEventListener("conversation.updated", (event) => {
@@ -935,22 +1019,37 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
                 {selected?.aiRepliesStopped ? <StatusBadge value="AI REPLIES STOPPED" /> : null}
               </div>
 
-              <div ref={scrollRef} className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-950/30 p-4">
+              <div
+                ref={scrollRef}
+                onScroll={(event) => {
+                  if (event.currentTarget.scrollTop < 32) {
+                    void loadOlderMessages();
+                  }
+                }}
+                className="custom-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-950/30 p-4"
+              >
                 {loadingThread ? (
                   <LoadingSkeleton rows={8} />
                 ) : messages.length ? (
-                  messages.map((message, index) => {
-                    const previousMessage = messages[index - 1];
-                    const showDateSeparator =
-                      !previousMessage || messageDateKey(previousMessage.createdAt) !== messageDateKey(message.createdAt);
+                  <>
+                    {loadingOlder ? (
+                      <div className="py-2">
+                        <LoadingSkeleton rows={1} />
+                      </div>
+                    ) : null}
+                    {messages.map((message, index) => {
+                      const previousMessage = messages[index - 1];
+                      const showDateSeparator =
+                        !previousMessage || messageDateKey(previousMessage.createdAt) !== messageDateKey(message.createdAt);
 
-                    return (
-                      <Fragment key={message.id}>
-                        {showDateSeparator ? <MessageDateSeparator value={message.createdAt} /> : null}
-                        <MessageBubble message={message} />
-                      </Fragment>
-                    );
-                  })
+                      return (
+                        <Fragment key={message.id}>
+                          {showDateSeparator ? <MessageDateSeparator value={message.createdAt} /> : null}
+                          <MessageBubble message={message} />
+                        </Fragment>
+                      );
+                    })}
+                  </>
                 ) : (
                   <div className="grid h-full place-items-center text-center text-sm text-slate-500">
                     <div>

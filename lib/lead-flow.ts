@@ -1,4 +1,4 @@
-import { Prisma, type IntegrationType } from "@prisma/client";
+import { Prisma, type ConversationSource, type IntegrationType, type LeadStatus, type LeadTemperature } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { safeCreateAuditLog } from "@/lib/audit";
@@ -278,27 +278,111 @@ async function syncConfiguredApprovedTemplate(tenantId: string) {
   });
 }
 
-export async function leadFlowSummary(tenantId: string) {
+type LeadFlowSummaryOptions = {
+  limit?: number;
+  cursor?: string | null;
+  search?: string | null;
+  status?: string | null;
+  leadTemperature?: string | null;
+  source?: string | null;
+};
+
+export async function leadFlowSummary(tenantId: string, options: LeadFlowSummaryOptions = {}) {
   await syncConfiguredApprovedTemplate(tenantId);
   const integrations = await currentFlowIntegrations(tenantId);
+  const limit = Math.min(Math.max(1, Math.floor(options.limit ?? 50)), 100);
+  const search = options.search?.trim().slice(0, 80);
+  const where: Prisma.LeadWhereInput = { tenantId };
+  const and: Prisma.LeadWhereInput[] = [];
+
+  if (options.status) {
+    and.push({ status: options.status as LeadStatus });
+  }
+  if (options.leadTemperature) {
+    and.push({ temperature: options.leadTemperature as LeadTemperature });
+  }
+  if (options.source) {
+    and.push({ source: options.source as ConversationSource });
+  }
+  if (search) {
+    and.push({
+      OR: [
+        { productInterest: { contains: search, mode: "insensitive" } },
+        { location: { contains: search, mode: "insensitive" } },
+        { contact: { is: { name: { contains: search, mode: "insensitive" } } } },
+        { contact: { is: { phone: { contains: search, mode: "insensitive" } } } },
+        { contact: { is: { phoneNormalized: { contains: search, mode: "insensitive" } } } },
+        { contact: { is: { waId: { contains: search, mode: "insensitive" } } } },
+        { contact: { is: { last10: { contains: search, mode: "insensitive" } } } }
+      ]
+    });
+  }
+  if (and.length) {
+    where.AND = and;
+  }
+
   const templates = await prisma.whatsAppTemplate.findMany({
     where: { tenantId, status: "APPROVED" },
+    select: {
+      id: true,
+      name: true,
+      language: true,
+      category: true,
+      status: true,
+      body: true,
+      updatedAt: true
+    },
     orderBy: [{ updatedAt: "desc" }],
     take: 20
   });
   const leads = await prisma.lead.findMany({
-    where: { tenantId },
-    include: {
-      contact: true,
+    where,
+    select: {
+      id: true,
+      status: true,
+      temperature: true,
+      source: true,
+      productInterest: true,
+      updatedAt: true,
+      createdAt: true,
+      contact: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          phoneNormalized: true,
+          optOut: true,
+          customerReplyCount: true,
+          totalMessageCount: true,
+          lastMessageAt: true,
+          lastContactedAt: true
+        }
+      },
       conversation: {
-        include: {
-          messages: { orderBy: { createdAt: "desc" }, take: 1 }
+        select: {
+          id: true,
+          status: true,
+          humanTakeover: true,
+          lastMessageText: true,
+          lastMessageAt: true,
+          messages: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              metadata: true,
+              failureReason: true
+            }
+          }
         }
       }
     },
     orderBy: { updatedAt: "desc" },
-    take: 30
+    ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
+    take: limit + 1
   });
+  const page = leads.slice(0, limit);
   const totals = await prisma.lead.groupBy({
     by: ["temperature"],
     where: { tenantId },
@@ -333,20 +417,23 @@ export async function leadFlowSummary(tenantId: string) {
       warm: totals.find((row) => row.temperature === "WARM")?._count._all ?? 0,
       scrap: totals.find((row) => row.temperature === "SCRAP")?._count._all ?? 0
     },
-    leads: leads.map((lead) => ({
+    leads: page.map((lead) => ({
       id: lead.id,
       status: lead.status,
       temperature: lead.temperature,
       source: lead.source,
       productInterest: lead.productInterest,
       updatedAt: lead.updatedAt.toISOString(),
+      createdAt: lead.createdAt.toISOString(),
       contact: {
         id: lead.contact.id,
         name: lead.contact.name,
         phone: lead.contact.phone,
+        phoneNormalized: lead.contact.phoneNormalized,
         optOut: lead.contact.optOut,
         customerReplyCount: lead.contact.customerReplyCount,
         totalMessageCount: lead.contact.totalMessageCount,
+        lastCustomerMessageAt: lead.contact.lastMessageAt?.toISOString() ?? null,
         lastContactedAt: lead.contact.lastContactedAt?.toISOString() ?? null
       },
       conversation: lead.conversation
@@ -363,7 +450,12 @@ export async function leadFlowSummary(tenantId: string) {
             };
           })()
         : null
-    }))
+    })),
+    pagination: {
+      limit,
+      hasMore: leads.length > limit,
+      nextCursor: leads.length > limit ? page[page.length - 1]?.id ?? null : null
+    }
   };
 }
 

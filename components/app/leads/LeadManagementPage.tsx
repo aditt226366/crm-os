@@ -136,20 +136,27 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
 
   const load = useCallback(async () => {
     setError(null);
-    const response = await fetch("/api/app/leads", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
+    setAutoSyncing(true);
+    try {
+      const params = new URLSearchParams({ limit: "50" });
+      if (leadQuery.trim()) params.set("search", leadQuery.trim());
+      const response = await fetch(`/api/app/leads?${params.toString()}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
+      }
+      setData(payload as LeadData);
+    } finally {
+      setAutoSyncing(false);
     }
-    setData(payload as LeadData);
-  }, []);
+  }, [leadQuery]);
 
   useEffect(() => {
     let active = true;
 
     async function loadInitial() {
       try {
-        const response = await fetch("/api/app/leads", { cache: "no-store" });
+        const response = await fetch("/api/app/leads?limit=50", { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
@@ -169,24 +176,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
   }, []);
 
   const ready = useMemo(() => data?.integrations.every((integration) => integration.ready) ?? false, [data]);
-  const filteredLeads = useMemo(() => {
-    const leads = data?.leads ?? [];
-    const needle = leadQuery.trim().toLowerCase();
-    if (!needle) return leads;
-
-    return leads.filter((lead) =>
-      [
-        lead.contact.name,
-        lead.contact.phone,
-        lead.status,
-        lead.temperature,
-        lead.source,
-        lead.conversation?.status,
-        lead.conversation?.lastMessageText,
-        lead.conversation?.lastMessageStatus
-      ].some((value) => value?.toLowerCase().includes(needle))
-    );
-  }, [data?.leads, leadQuery]);
+  const filteredLeads = useMemo(() => data?.leads ?? [], [data?.leads]);
 
   const runFlow = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (flowRunningRef.current) return;
@@ -225,25 +215,12 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
   }
 
   useEffect(() => {
-    if (!ready) return;
-    let active = true;
-    const sync = async () => {
-      if (flowRunningRef.current) return;
-      setAutoSyncing(true);
-      try {
-        await load();
-      } catch (syncError) {
-        if (active) setError(syncError instanceof Error ? syncError.message : "Unable to refresh lead flow");
-      } finally {
-        if (active) setAutoSyncing(false);
-      }
-    };
-    const interval = window.setInterval(sync, 5_000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, [load, ready]);
+    if (loading) return;
+    const timeout = window.setTimeout(() => {
+      load().catch((loadError: Error) => setError(loadError.message));
+    }, 400);
+    return () => window.clearTimeout(timeout);
+  }, [leadQuery, load, loading]);
 
   return (
     <FeatureGuard featureKey="LEAD_MANAGEMENT">
@@ -254,7 +231,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
           description="Google Sheets intake, approved template outreach, and AI-led WhatsApp follow-up for tenant leads."
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              {autoSyncing ? <StatusBadge value="AUTO SYNCING" /> : <StatusBadge value="AUTO SYNC ENABLED" />}
+              {autoSyncing ? <StatusBadge value="REFRESHING" /> : <StatusBadge value="MANUAL REFRESH" />}
               <NeonButton type="button" onClick={() => load().catch((loadError: Error) => setError(loadError.message))}>
                 <RefreshCw className="h-4 w-4" />
                 Refresh

@@ -10,6 +10,7 @@ import { serializeIntegration } from "@/lib/serializers";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { defaultMaskedDisplay } from "@/lib/integration-vault";
+import { invalidateTenantIntegrationCache } from "@/lib/egress";
 
 type Context = { params: Promise<{ id: string; integrationType: string }> };
 
@@ -58,6 +59,7 @@ export async function POST(request: NextRequest, context: Context) {
       entityId: integration.id,
       newValue: { type, status: "NOT_CONNECTED" }
     });
+    invalidateTenantIntegrationCache(id);
     return integrationSuccess({
       message: `${INTEGRATION_DEFINITIONS[type].name} disconnected`,
       integration: serializeIntegration(integration)

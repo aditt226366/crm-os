@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  BarChart3,
   Building2,
   ChevronDown,
   FileText,
@@ -24,7 +25,8 @@ const PRIMARY_LINKS: NavLink[] = [
 
 const LOG_LINKS: NavLink[] = [
   { label: "Audit Logs", href: "/admin/audit-logs", icon: FileText },
-  { label: "Admin Logs", href: "/admin/admin-logs", icon: ShieldAlert }
+  { label: "Admin Logs", href: "/admin/admin-logs", icon: ShieldAlert },
+  { label: "Egress Diagnostics", href: "/admin/usage/egress-diagnostics", icon: BarChart3 }
 ];
 
 const SETTINGS_LINK: NavLink = { label: "Settings", href: "/admin/settings", icon: Settings };

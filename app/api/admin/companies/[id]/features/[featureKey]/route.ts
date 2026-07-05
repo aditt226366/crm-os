@@ -7,6 +7,7 @@ import { serializeFeature } from "@/lib/serializers";
 import { writeAuditLog } from "@/lib/audit";
 import { ensureTenantFeatureSchema } from "@/lib/tenant-feature-schema";
 import { isManagedFeatureKey } from "@/lib/constants";
+import { invalidateTenantEgressCaches } from "@/lib/egress";
 
 type Context = { params: Promise<{ id: string; featureKey: string }> };
 
@@ -47,6 +48,7 @@ export async function PATCH(request: NextRequest, context: Context) {
       oldValue,
       newValue: { featureKey, enabled: body.enabled }
     });
+    invalidateTenantEgressCaches(id);
     return json({ feature: serializeFeature(feature) });
   } catch (error) {
     return errorResponse(error);

@@ -1,4 +1,5 @@
 import { FEATURE_DEFINITIONS, INTEGRATION_DEFINITIONS, type FeatureKey, type IntegrationType } from "@/lib/constants";
+import { safeMetadataSummary } from "@/lib/egress";
 
 type DecimalLike = {
   toNumber?: () => number;
@@ -59,7 +60,7 @@ export function serializeIntegration(integration: {
     description: definition.description,
     status: integration.status,
     maskedDisplay: integration.maskedDisplay,
-    metadata: integration.metadata ?? null,
+    metadata: safeMetadataSummary(integration.metadata),
     lastVerifiedAt: integration.lastVerifiedAt?.toISOString() ?? null,
     lastVerificationError: integration.lastVerificationError,
     createdBy: integration.createdBy

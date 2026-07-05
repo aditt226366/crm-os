@@ -42,7 +42,7 @@ export function CompaniesPage() {
   }, []);
 
   useEffect(() => {
-    void loadCompanies();
+    queueMicrotask(() => void loadCompanies());
   }, [loadCompanies]);
 
   function openCompany(company: CompanySummary) {

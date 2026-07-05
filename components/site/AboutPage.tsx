@@ -141,7 +141,7 @@ export function AboutPage() {
               screenshot. Nothing gets lost between shifts.
             </p>
             <p>
-              We're a small team that cares more about the boring parts — isolation, encryption, audit trails, and
+              We&apos;re a small team that cares more about the boring parts — isolation, encryption, audit trails, and
               latency — than the buzzwords. Because the businesses that run on WhatsApp-OS are trusting it with the
               conversations that pay their bills.
             </p>
@@ -224,7 +224,7 @@ export function AboutPage() {
             <p>
               Meanwhile, statuses stream back from Meta in real time, follow-ups fire on schedule for the leads that go
               quiet, confirmed orders are captured out of the chat, and everything sensitive is written to an audit
-              trail. That's the loop — and it runs whether or not anyone is watching the queue.
+              trail. That&apos;s the loop — and it runs whether or not anyone is watching the queue.
             </p>
           </div>
         </div>
@@ -273,7 +273,7 @@ export function AboutPage() {
             Want to see it for your team?
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-neutral-600">
-            Book a walkthrough and we'll tailor it to exactly how your business uses WhatsApp today.
+            Book a walkthrough and we&apos;ll tailor it to exactly how your business uses WhatsApp today.
           </p>
           <Link href="/request-demo" className={cn(primaryBtn, "mt-8")}>
             Request a demo

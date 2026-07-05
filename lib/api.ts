@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
+import { recordApiResponseSize } from "@/lib/egress";
 
 export class ApiError extends Error {
   constructor(
@@ -12,11 +13,39 @@ export class ApiError extends Error {
   }
 }
 
-export function json(data: unknown, init?: ResponseInit) {
-  const response = NextResponse.json(data, init);
+type JsonInit = ResponseInit & {
+  egress?: {
+    route?: string;
+    tenantId?: string | null;
+    startedAt?: number;
+  };
+};
+
+function responseSizeBytes(data: unknown) {
+  try {
+    return Buffer.byteLength(JSON.stringify(data), "utf8");
+  } catch {
+    return 0;
+  }
+}
+
+export function json(data: unknown, init?: JsonInit) {
+  const { egress, ...responseInit } = init ?? {};
+  const response = NextResponse.json(data, responseInit);
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Frame-Options", "DENY");
+  if (egress?.route?.startsWith("/api/app") || egress?.route?.startsWith("/api/admin")) {
+    const responseBytes = responseSizeBytes(data);
+    response.headers.set("X-CRM-Response-Bytes", String(responseBytes));
+    recordApiResponseSize({
+      route: egress.route,
+      status: responseInit.status ?? 200,
+      responseBytes,
+      tenantId: egress.tenantId,
+      durationMs: egress.startedAt ? Date.now() - egress.startedAt : null
+    });
+  }
   return response;
 }
 

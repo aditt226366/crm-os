@@ -443,6 +443,7 @@ model Conversation {
   campaignRecipients             CampaignRecipient[]
 
   @@index([tenantId, lastMessageAt])
+  @@index([tenantId, lastMessageAt, id])
   @@index([tenantId, status])
   @@index([tenantId, source])
   @@index([tenantId, contactId])
@@ -471,6 +472,7 @@ model Message {
 
   @@unique([tenantId, whatsappMessageId])
   @@index([tenantId, conversationId, createdAt])
+  @@index([tenantId, conversationId, createdAt, id])
   @@index([tenantId, direction, createdAt])
   @@index([status])
 }
@@ -497,6 +499,7 @@ model Lead {
   @@index([tenantId, source])
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@index([tenantId, updatedAt, id])
 }
 
 model Broadcast {
@@ -517,6 +520,7 @@ model Broadcast {
 
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
+  @@index([tenantId, status, createdAt])
 }
 
 model BroadcastRecipient {
@@ -709,6 +713,7 @@ model HumanQueueItem {
   resolvedAt     DateTime?
 
   @@index([tenantId, status, priority])
+  @@index([tenantId, status, priority, createdAt])
   @@index([tenantId, conversationId])
 }
 

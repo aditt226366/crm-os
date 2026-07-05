@@ -88,7 +88,7 @@ export function CompanyWorkspace({ companyId }: { companyId: string }) {
   }, [companyId]);
 
   useEffect(() => {
-    void load();
+    queueMicrotask(() => void load());
   }, [load]);
 
   if (error) {
@@ -324,7 +324,7 @@ function FeaturesTab({ companyId, onChanged }: { companyId: string; onChanged: (
   }, [companyId]);
 
   useEffect(() => {
-    void load();
+    queueMicrotask(() => void load());
   }, [load]);
 
   async function toggle(feature: FeatureRecord) {
