@@ -6,7 +6,10 @@ import { resolveContactForPhone } from "@/lib/contact-identity";
 import { INTEGRATION_DEFINITIONS, type FeatureKey } from "@/lib/constants";
 import {
   CRM_LEADS_RANGE,
+  DEFAULT_LEAD_SHEET_RANGE,
   ensureGoogleSheetStatusColumn,
+  googleSheetTabRange,
+  isCrmLeadsRange,
   readGoogleSheetLeads,
   updateGoogleSheetLeadStatuses,
   type SheetLead
@@ -37,6 +40,7 @@ import {
 
 const FLOW_INTEGRATIONS = ["GOOGLE_SHEETS", "WHATSAPP_CLOUD", "WHATSAPP_TEMPLATE_SETTINGS", "KNOWLEDGE_BASE", "AI_MODEL"] as const;
 const DEFAULT_SEND_GAP_MS = 6000;
+const V9_SOURCE_SHEETS = new Set(["ug leads", "online mba leads"]);
 
 type FlowIntegration = {
   type: IntegrationType;
@@ -135,12 +139,15 @@ function sheetLeadMetadata(lead: SheetLead): Prisma.InputJsonObject {
   const googleSheet = {
     source_sheet: lead.sourceSheet,
     sourceSheet: lead.sourceSheet,
+    source_row: lead.sourceRow,
+    sourceRow: lead.sourceRow,
     rowNumber: lead.rowNumber,
     row: lead.row
   };
 
   return {
     source_sheet: lead.sourceSheet,
+    source_row: lead.sourceRow,
     googleSheet
   };
 }
@@ -152,10 +159,13 @@ function mergeSheetLeadMetadata(existing: unknown, lead: SheetLead): Prisma.Inpu
   return {
     ...current,
     source_sheet: lead.sourceSheet,
+    source_row: lead.sourceRow,
     googleSheet: {
       ...currentGoogleSheet,
       source_sheet: lead.sourceSheet,
       sourceSheet: lead.sourceSheet,
+      source_row: lead.sourceRow,
+      sourceRow: lead.sourceRow,
       rowNumber: lead.rowNumber,
       row: lead.row
     }
@@ -167,6 +177,70 @@ function sourceSheetFromMetadata(metadata: unknown) {
   const googleSheet = asRecord(record.googleSheet);
   const value = record.source_sheet ?? googleSheet.source_sheet ?? googleSheet.sourceSheet;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function sourceWritebackSheetName(lead: SheetLead) {
+  const sourceSheet = lead.sourceSheet?.trim();
+  if (!sourceSheet) return null;
+  return V9_SOURCE_SHEETS.has(sourceSheet.toLowerCase()) ? sourceSheet : null;
+}
+
+function sourceWritebackTarget(lead: SheetLead) {
+  const sourceSheet = sourceWritebackSheetName(lead);
+  if (!sourceSheet || !lead.sourceRow) return null;
+  return {
+    range: googleSheetTabRange(sourceSheet),
+    rowNumber: lead.sourceRow,
+    sourceSheet,
+    sourceRow: lead.sourceRow
+  };
+}
+
+function isMissingCrmLeadsTabError(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    error.code === "GOOGLE_SHEETS_READ_FAILED" &&
+    /unable to parse range|cannot find|not found|range/i.test(error.message)
+  );
+}
+
+async function readSheetLeadsForFlow({
+  config,
+  maxRows
+}: {
+  config: IntegrationConfig;
+  maxRows: number;
+}) {
+  try {
+    return {
+      range: CRM_LEADS_RANGE,
+      readOnlyMaster: true,
+      leads: await readGoogleSheetLeads({
+        config,
+        range: CRM_LEADS_RANGE,
+        maxRows
+      })
+    };
+  } catch (error) {
+    if (!isMissingCrmLeadsTabError(error)) {
+      throw error;
+    }
+  }
+
+  await ensureGoogleSheetStatusColumn({
+    config,
+    range: DEFAULT_LEAD_SHEET_RANGE,
+    defaultStatus: "new"
+  });
+  return {
+    range: DEFAULT_LEAD_SHEET_RANGE,
+    readOnlyMaster: false,
+    leads: await readGoogleSheetLeads({
+      config,
+      range: DEFAULT_LEAD_SHEET_RANGE,
+      maxRows
+    })
+  };
 }
 
 async function activeMetaDeliveryLimitForContact({
@@ -229,24 +303,58 @@ async function safeMarkSheetLeadStatus({
   config,
   range,
   lead,
-  status
+  status,
+  statusColumnCache
 }: {
   config: IntegrationConfig;
   range: string;
   lead: SheetLead;
   status: string;
+  statusColumnCache: Map<string, number | null>;
 }) {
-  if (lead.statusColumnIndex === null) {
+  const sourceTarget = sourceWritebackTarget(lead);
+  const targetRange = sourceTarget?.range ?? range;
+  const targetRowNumber = sourceTarget?.rowNumber ?? lead.rowNumber;
+
+  if (!sourceTarget && isCrmLeadsRange(range)) {
+    return {
+      ok: false,
+      skipped: false as const,
+      error: "crm_leads is read-only and this row has no valid source_sheet/source_row write-back target."
+    };
+  }
+
+  let statusColumnIndex = sourceTarget ? statusColumnCache.get(targetRange) : lead.statusColumnIndex;
+  if (statusColumnIndex === undefined || statusColumnIndex === null) {
+    try {
+      const ensured = await ensureGoogleSheetStatusColumn({
+        config,
+        range: targetRange,
+        defaultStatus: "new"
+      });
+      statusColumnIndex = ensured.statusColumnIndex;
+      statusColumnCache.set(targetRange, statusColumnIndex);
+    } catch (error) {
+      console.error("[lead-flow.sheets] status column lookup failed", error instanceof Error ? error.message : String(error));
+      return {
+        ok: false,
+        skipped: false as const,
+        error: error instanceof Error ? error.message : "Google Sheets status column lookup failed"
+      };
+    }
+  }
+
+  if (statusColumnIndex === null) {
     return { ok: true, skipped: true as const };
   }
 
   try {
     await updateGoogleSheetLeadStatuses({
       config,
-      range,
-      updates: [{ rowNumber: lead.rowNumber, statusColumnIndex: lead.statusColumnIndex, status }]
+      range: targetRange,
+      updates: [{ rowNumber: targetRowNumber, statusColumnIndex, status }]
     });
-    return { ok: true, skipped: false as const };
+    return { ok: true, skipped: false as const, targetRange, targetRowNumber, statusColumnIndex };
   } catch (error) {
     console.error("[lead-flow.sheets] status update failed", error instanceof Error ? error.message : String(error));
     return {
@@ -516,6 +624,8 @@ async function upsertLeadConversation({ tenantId, lead }: { tenantId: string; le
       googleSheet: {
         source_sheet: lead.sourceSheet,
         sourceSheet: lead.sourceSheet,
+        source_row: lead.sourceRow,
+        sourceRow: lead.sourceRow,
         rowNumber: lead.rowNumber,
         row: lead.row
       }
@@ -653,17 +763,13 @@ export async function runGoogleSheetLeadFlow({
     templatePurpose: "MAIN"
   });
   const template = mainTemplateMessageConfig.template;
-  const sheetRange = CRM_LEADS_RANGE;
-  await ensureGoogleSheetStatusColumn({
+  const sheetSource = await readSheetLeadsForFlow({
     config: sheetsConfig,
-    range: sheetRange,
-    defaultStatus: "new"
-  });
-  const sheetLeads = await readGoogleSheetLeads({
-    config: sheetsConfig,
-    range: sheetRange,
     maxRows: Math.min(Math.max(maxRows ?? 200, 1), 200)
   });
+  const sheetRange = sheetSource.range;
+  const sheetLeads = sheetSource.leads;
+  const statusColumnCache = new Map<string, number | null>();
 
   const results = [];
   const sendGapMs = configuredLeadSendGapMs();
@@ -683,6 +789,20 @@ export async function runGoogleSheetLeadFlow({
       continue;
     }
 
+    const writebackTarget = sourceWritebackTarget(sheetLead);
+    if (sheetSource.readOnlyMaster && !writebackTarget) {
+      results.push({
+        phone: sheetLead.phone,
+        status: "skipped",
+        reason: "crm_leads row is missing a valid source_sheet/source_row write-back target.",
+        sheetStatus: sheetLead.status ?? null,
+        sourceSheet: sheetLead.sourceSheet,
+        sourceRow: sheetLead.sourceRow,
+        rowNumber: sheetLead.rowNumber
+      });
+      continue;
+    }
+
     const { contact, conversation } = await upsertLeadConversation({ tenantId, lead: sheetLead });
     const leadRecord = await prisma.lead.findFirst({
       where: { tenantId, contactId: contact.id },
@@ -694,7 +814,8 @@ export async function runGoogleSheetLeadFlow({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: "failure"
+        status: "failure",
+        statusColumnCache
       });
       results.push({
         phone: contact.phone,
@@ -717,7 +838,8 @@ export async function runGoogleSheetLeadFlow({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: META_DELIVERY_LIMIT_DISPLAY
+        status: META_DELIVERY_LIMIT_DISPLAY,
+        statusColumnCache
       });
       results.push({
         phone: contact.phone,
@@ -735,7 +857,7 @@ export async function runGoogleSheetLeadFlow({
       if (leadRecord) {
         await markCrmLeadContacted(leadRecord.id);
       }
-      const sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead });
+      const sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead, statusColumnCache });
       results.push({
         phone: contact.phone,
         status: "skipped",
@@ -771,10 +893,14 @@ export async function runGoogleSheetLeadFlow({
       templateName: template.name,
       templateLanguage: template.language,
       sheetRowNumber: sheetLead.rowNumber,
-      sheetStatusColumnIndex: sheetLead.statusColumnIndex,
+      sheetSourceRow: sheetLead.sourceRow,
+      sheetStatusColumnIndex: writebackTarget ? null : sheetLead.statusColumnIndex,
       sheetRange,
       sheetSourceSheet: sheetLead.sourceSheet,
+      sheetStatusRange: writebackTarget?.range ?? (isCrmLeadsRange(sheetRange) ? null : sheetRange),
+      sheetStatusRowNumber: writebackTarget?.rowNumber ?? (isCrmLeadsRange(sheetRange) ? null : sheetLead.rowNumber),
       source_sheet: sheetLead.sourceSheet,
+      source_row: sheetLead.sourceRow,
       leadSendGapMs: sendGapMs,
       variableMode: templateConfig.variableMode,
       variableMappings: templateConfig.variables,
@@ -810,14 +936,16 @@ export async function runGoogleSheetLeadFlow({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: META_DELIVERY_LIMIT_DISPLAY
+        status: META_DELIVERY_LIMIT_DISPLAY,
+        statusColumnCache
       });
     } else if (!sendResult.ok) {
       await safeMarkSheetLeadStatus({
         config: sheetsConfig,
         range: sheetRange,
         lead: sheetLead,
-        status: "failure"
+        status: "failure",
+        statusColumnCache
       });
     }
 
@@ -839,7 +967,9 @@ export async function runGoogleSheetLeadFlow({
         templateName: template.name,
         sheetRange,
         sheetRowNumber: sheetLead.rowNumber,
-        source_sheet: sheetLead.sourceSheet
+        sheetSourceRow: sheetLead.sourceRow,
+        source_sheet: sheetLead.sourceSheet,
+        source_row: sheetLead.sourceRow
       }
     });
 
@@ -866,7 +996,7 @@ export async function runGoogleSheetLeadFlow({
       if (leadRecord) {
         await markCrmLeadContacted(leadRecord.id);
       }
-      sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead });
+      sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead, statusColumnCache });
     }
 
     results[results.length - 1] = {
@@ -888,6 +1018,7 @@ export async function runGoogleSheetLeadFlow({
     entityType: "Lead",
     newValue: {
       range: sheetRange,
+      readOnlyMaster: sheetSource.readOnlyMaster,
       maxRows: maxRows ?? 200,
       scanned: sheetLeads.length,
       sent: results.filter((result) => result.status === "sent").length,

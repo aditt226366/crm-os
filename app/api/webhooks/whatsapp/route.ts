@@ -6,7 +6,12 @@ import { upsertInboundConversationMessage, serializeConversation, serializeMessa
 import { emitTenantEvent } from "@/lib/realtime";
 import { whatsappWebhookMessageSchema } from "@/lib/validation";
 import { readEncryptedConfig } from "@/lib/integration-vault";
-import { CRM_LEADS_RANGE, readGoogleSheetLeads, updateGoogleSheetLeadStatuses } from "@/lib/google-sheets-leads";
+import {
+  ensureGoogleSheetStatusColumn,
+  googleSheetTabRange,
+  isCrmLeadsRange,
+  updateGoogleSheetLeadStatuses
+} from "@/lib/google-sheets-leads";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
 import { downloadWhatsAppMedia, messageTypeFromMime } from "@/lib/whatsapp-cloud";
 import {
@@ -20,6 +25,7 @@ import { syncConversationWorkflowSignals } from "@/lib/conversation-workflow";
 import { invalidateTenantEgressCaches } from "@/lib/egress";
 
 const MAX_DATABASE_MEDIA_BYTES = 16 * 1024 * 1024;
+const V9_SOURCE_SHEETS = new Set(["ug leads", "online mba leads"]);
 
 type MetaMedia = {
   id?: string;
@@ -220,6 +226,16 @@ function metadataNumber(metadata: unknown, key: string) {
   return Number.isInteger(numberValue) ? numberValue : null;
 }
 
+function metadataSourceWritebackTarget(metadata: unknown) {
+  const sourceSheet = metadataString(metadata, "sheetSourceSheet") || metadataString(metadata, "source_sheet");
+  const sourceRow = metadataNumber(metadata, "sheetSourceRow") ?? metadataNumber(metadata, "source_row");
+  if (!sourceSheet || !sourceRow || !V9_SOURCE_SHEETS.has(sourceSheet.toLowerCase())) return null;
+  return {
+    range: googleSheetTabRange(sourceSheet),
+    rowNumber: sourceRow
+  };
+}
+
 async function updateLeadSheetStatusFromWebhook({
   tenantId,
   metadata,
@@ -231,10 +247,12 @@ async function updateLeadSheetStatusFromWebhook({
 }) {
   if (metadataString(metadata, "adapter") !== "lead-google-sheets-flow") return;
 
-  const rowNumber = metadataNumber(metadata, "sheetRowNumber");
-  const range = metadataString(metadata, "sheetRange");
-  let statusColumnIndex = metadataNumber(metadata, "sheetStatusColumnIndex");
-  if (range !== CRM_LEADS_RANGE) return;
+  const sourceTarget = metadataSourceWritebackTarget(metadata);
+  const range = sourceTarget?.range || metadataString(metadata, "sheetStatusRange") || metadataString(metadata, "sheetRange");
+  const rowNumber =
+    sourceTarget?.rowNumber ?? metadataNumber(metadata, "sheetStatusRowNumber") ?? metadataNumber(metadata, "sheetRowNumber");
+  let statusColumnIndex = sourceTarget ? null : metadataNumber(metadata, "sheetStatusColumnIndex");
+  if (!range || isCrmLeadsRange(range)) return;
   if (!rowNumber || rowNumber <= 0) return;
 
   const integration = await prisma.integration.findUnique({
@@ -245,9 +263,12 @@ async function updateLeadSheetStatusFromWebhook({
 
   const config = readEncryptedConfig(integration.encryptedConfig);
   if (statusColumnIndex === null || statusColumnIndex < 0) {
-    const maxRows = Math.max(1000, rowNumber);
-    const leads = await readGoogleSheetLeads({ config, range, maxRows });
-    statusColumnIndex = leads.find((lead) => lead.rowNumber === rowNumber)?.statusColumnIndex ?? null;
+    const ensured = await ensureGoogleSheetStatusColumn({
+      config,
+      range,
+      defaultStatus: "new"
+    });
+    statusColumnIndex = ensured.statusColumnIndex;
   }
   if (statusColumnIndex === null || statusColumnIndex < 0) return;
 
