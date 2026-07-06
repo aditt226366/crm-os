@@ -36,10 +36,6 @@ export type IntegrationCompanySummary = {
   slug: string;
   plan: string;
   status: string;
-  ownerEmail: string;
-  ownerUsername: string;
-  ownerName: string;
-  lastLoginAt: string | null;
   totalIntegrationsCount: number;
   connectedIntegrationsCount: number;
   errorIntegrationsCount: number;
@@ -271,13 +267,11 @@ function IntegrationCompanyCard({
             <p className="mt-2 font-semibold text-white">{company.errorIntegrationsCount}</p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-            <p className="text-xs text-slate-500">Owner</p>
-            <p className="mt-2 truncate font-semibold text-white">{company.ownerUsername || company.ownerEmail}</p>
+            <p className="text-xs text-slate-500">Slug</p>
+            <p className="mt-2 truncate font-semibold text-white">{company.slug}</p>
           </div>
         </div>
 
-        <p className="mt-4 truncate text-sm text-slate-300">{company.ownerEmail}</p>
-        <p className="mt-1 text-xs text-slate-500">Last login: {displayDate(company.lastLoginAt)}</p>
         <NeonButton className="mt-5 w-full" variant="secondary" onClick={() => onManage(company)}>
           Manage Integrations
         </NeonButton>

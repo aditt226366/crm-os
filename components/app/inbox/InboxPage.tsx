@@ -19,7 +19,9 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
 import { NeonButton } from "@/components/shared/NeonButton";
 import { StatusBadge } from "@/components/shared/StatusBadge";
+import { useAppShell } from "@/components/app/AppLayout";
 import { isMetaDeliveryLimitError } from "@/lib/meta-delivery-limit";
+import { runtimeConfig } from "@/lib/performance/runtimeConfig";
 import { cn } from "@/lib/utils";
 
 type Conversation = {
@@ -106,9 +108,59 @@ type InboxFilter = (typeof filters)[number][0];
 
 const confirmedOrderStatuses = new Set(["CONFIRMED", "DISPATCHED", "COMPLETED"]);
 const emojiOptions = ["😀", "😂", "😊", "😍", "👍", "🙏", "🔥", "🎉", "✅", "❤️", "👌", "🤝", "😎", "😇", "🙌", "💯"];
-const INBOX_LIST_POLL_MS = 30_000;
-const SELECTED_CONVERSATION_POLL_MS = 15_000;
 const IDLE_POLL_PAUSE_MS = 2 * 60_000;
+const HIDDEN_INBOX_LIST_POLL_MS = 30_000;
+
+type CachedThread = {
+  messages: Message[];
+  hasMoreOlderMessages: boolean;
+};
+
+type InboxClientCache = {
+  conversations: Conversation[];
+  selectedId: string | null;
+  messagesByConversation: Map<string, CachedThread>;
+  lastConversationSync: string | null;
+};
+
+const inboxClientCaches = new Map<string, InboxClientCache>();
+
+function inboxClientCache(cacheKey: string) {
+  let cache = inboxClientCaches.get(cacheKey);
+  if (!cache) {
+    cache = {
+      conversations: [],
+      selectedId: null,
+      messagesByConversation: new Map(),
+      lastConversationSync: null
+    };
+    inboxClientCaches.set(cacheKey, cache);
+  }
+  return cache;
+}
+
+function writeInboxClientCache(cacheKey: string, patch: Partial<Omit<InboxClientCache, "messagesByConversation">>) {
+  const current = inboxClientCache(cacheKey);
+  inboxClientCaches.set(cacheKey, {
+    ...current,
+    ...patch
+  });
+}
+
+function readCachedThread(cacheKey: string, conversationId: string | null) {
+  if (!conversationId) return null;
+  return inboxClientCache(cacheKey).messagesByConversation.get(conversationId) ?? null;
+}
+
+function writeCachedThread(cacheKey: string, conversationId: string, thread: CachedThread) {
+  const current = inboxClientCache(cacheKey);
+  const messagesByConversation = new Map(current.messagesByConversation);
+  messagesByConversation.set(conversationId, thread);
+  inboxClientCaches.set(cacheKey, {
+    ...current,
+    messagesByConversation
+  });
+}
 
 function relativeTime(value: string | null) {
   if (!value) return "";
@@ -657,20 +709,24 @@ function ContactPanel({
 }
 
 export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(false);
+  const { user } = useAppShell();
+  const cacheKey = user?.tenantId ?? user?.id ?? "anonymous";
+  const initialInboxCache = useMemo(() => inboxClientCache(cacheKey), [cacheKey]);
+  const cachedThread = readCachedThread(cacheKey, initialInboxCache.selectedId);
+  const [conversations, setConversations] = useState<Conversation[]>(() => initialInboxCache.conversations);
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialInboxCache.selectedId);
+  const [messages, setMessages] = useState<Message[]>(() => cachedThread?.messages ?? []);
+  const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(() => cachedThread?.hasMoreOlderMessages ?? false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [query, setQuery] = useState(initialSearch);
-  const [loadingList, setLoadingList] = useState(true);
+  const [loadingList, setLoadingList] = useState(() => initialInboxCache.conversations.length === 0);
   const [loadingThread, setLoadingThread] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadCardRef = useRef<HTMLDivElement | null>(null);
-  const lastConversationSyncRef = useRef<string | null>(null);
+  const lastConversationSyncRef = useRef<string | null>(initialInboxCache.lastConversationSync);
   const lastActivityRef = useRef(0);
 
   const visibleConversations = useMemo(
@@ -681,6 +737,22 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     () => conversations.find((conversation) => conversation.id === selectedId) ?? null,
     [conversations, selectedId]
   );
+
+  useEffect(() => {
+    writeInboxClientCache(cacheKey, {
+      conversations,
+      selectedId,
+      lastConversationSync: lastConversationSyncRef.current
+    });
+  }, [cacheKey, conversations, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    writeCachedThread(cacheKey, selectedId, {
+      messages,
+      hasMoreOlderMessages
+    });
+  }, [cacheKey, hasMoreOlderMessages, messages, selectedId]);
 
   const serviceWindowClosed = useMemo(() => {
     if (!selected?.customerServiceWindowExpiresAt) return true;
@@ -694,7 +766,7 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
       const params = new URLSearchParams({
         filter,
         q: query,
-        limit: "25"
+        limit: String(runtimeConfig.initialConversationLimit)
       });
       if (delta && lastConversationSyncRef.current) {
         params.set("since", lastConversationSyncRef.current);
@@ -703,6 +775,7 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
       if (!response.ok) throw new Error("Unable to load conversations");
       const data = (await response.json()) as { conversations: Conversation[]; sync?: { since?: string } };
       lastConversationSyncRef.current = data.sync?.since ?? new Date().toISOString();
+      writeInboxClientCache(cacheKey, { lastConversationSync: lastConversationSyncRef.current });
       if (delta) {
         setConversations((current) =>
           data.conversations.reduce((rows, conversation) => upsertConversation(rows, conversation), current)
@@ -722,13 +795,13 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     } finally {
       if (!delta) setLoadingList(false);
     }
-  }, [filter, query]);
+  }, [cacheKey, filter, query]);
 
   const loadConversation = useCallback(async (conversationId: string, options: { scrollToBottom?: boolean; quiet?: boolean } = {}) => {
     const shouldScrollToBottom = options.scrollToBottom ?? true;
     if (!options.quiet) setLoadingThread(true);
     try {
-      const response = await fetch(`/api/app/inbox/conversations/${conversationId}?limit=50`);
+      const response = await fetch(`/api/app/inbox/conversations/${conversationId}?limit=${runtimeConfig.initialMessageLimit}`);
       if (!response.ok) throw new Error("Unable to load conversation");
       const data = (await response.json()) as {
         conversation: Conversation;
@@ -784,13 +857,14 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   useEffect(() => {
     const selectedConversationId = selected?.id;
     if (selectedConversationId) {
-      const timeout = setTimeout(() => loadConversation(selectedConversationId), 0);
+      const cached = readCachedThread(cacheKey, selectedConversationId);
+      const timeout = setTimeout(() => loadConversation(selectedConversationId, { quiet: Boolean(cached) }), 0);
       return () => clearTimeout(timeout);
     } else {
       const timeout = setTimeout(() => setMessages([]), 0);
       return () => clearTimeout(timeout);
     }
-  }, [loadConversation, selected?.id]);
+  }, [cacheKey, loadConversation, selected?.id]);
 
   useEffect(() => {
     const markActive = () => {
@@ -799,14 +873,23 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     markActive();
     const events: Array<keyof WindowEventMap> = ["focus", "mousemove", "keydown", "pointerdown", "touchstart"];
     events.forEach((event) => window.addEventListener(event, markActive, { passive: true }));
-    const interval = window.setInterval(() => {
-      if (document.hidden) return;
-      if (Date.now() - lastActivityRef.current > IDLE_POLL_PAUSE_MS) return;
-      void loadConversations(null, { delta: true });
-    }, INBOX_LIST_POLL_MS);
+    let cancelled = false;
+    let timer: number | null = null;
+    const scheduleNext = () => {
+      const delay = document.hidden ? HIDDEN_INBOX_LIST_POLL_MS : runtimeConfig.inboxListRefreshMs;
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+        if (document.hidden || Date.now() - lastActivityRef.current <= IDLE_POLL_PAUSE_MS) {
+          void loadConversations(null, { delta: true });
+        }
+        scheduleNext();
+      }, delay);
+    };
+    scheduleNext();
     return () => {
+      cancelled = true;
       events.forEach((event) => window.removeEventListener(event, markActive));
-      window.clearInterval(interval);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [loadConversations]);
 
@@ -816,7 +899,7 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
       if (document.hidden) return;
       if (Date.now() - lastActivityRef.current > IDLE_POLL_PAUSE_MS) return;
       void loadConversation(selectedId, { scrollToBottom: false, quiet: true });
-    }, SELECTED_CONVERSATION_POLL_MS);
+    }, runtimeConfig.selectedChatRefreshMs);
     return () => window.clearInterval(interval);
   }, [loadConversation, selectedId]);
 
@@ -863,12 +946,41 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
 
   async function sendReply(body: string) {
     if (!selected) return;
+    const now = new Date().toISOString();
+    const optimisticMessage: Message = {
+      id: `optimistic-${selected.id}-${Date.now()}`,
+      conversationId: selected.id,
+      contactId: selected.contactId,
+      direction: "OUTBOUND",
+      type: "TEXT",
+      body,
+      templateId: null,
+      whatsappMessageId: null,
+      status: "PENDING",
+      failureReason: null,
+      metadata: { optimistic: true },
+      createdAt: now,
+      updatedAt: now
+    };
+    setMessages((current) => upsertMessage(current, optimisticMessage));
+    setConversations((current) =>
+      upsertConversation(current, {
+        ...selected,
+        lastMessageText: body,
+        lastMessageAt: now,
+        totalMessageCount: selected.totalMessageCount + 1
+      })
+    );
+    setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }), 0);
     try {
       const data = await postAction(`/api/app/inbox/conversations/${selected.id}/reply`, { body });
       if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
-      if (data.message) setMessages((current) => upsertMessage(current, data.message!));
+      if (data.message) {
+        setMessages((current) => upsertMessage(current.filter((message) => message.id !== optimisticMessage.id), data.message!));
+      }
       setNotice("Reply queued for WhatsApp delivery.");
     } catch (replyError) {
+      setMessages((current) => current.filter((message) => message.id !== optimisticMessage.id));
       setError(replyError instanceof Error ? replyError.message : "Reply failed");
     }
   }
@@ -925,6 +1037,11 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   }
 
   function selectConversation(conversationId: string) {
+    const cached = readCachedThread(cacheKey, conversationId);
+    if (cached) {
+      setMessages(cached.messages);
+      setHasMoreOlderMessages(cached.hasMoreOlderMessages);
+    }
     setSelectedId(conversationId);
     window.setTimeout(() => {
       if (window.matchMedia("(max-width: 1023px)").matches) {

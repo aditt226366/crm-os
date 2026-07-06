@@ -1,4 +1,5 @@
 import type { FeatureKey, IntegrationType } from "@/lib/constants";
+import { isEgressSafeMode, runtimeConfig } from "@/lib/performance/runtimeConfig";
 
 type CacheEntry<T> = {
   value: T;
@@ -41,19 +42,19 @@ const globalEgress = globalThis as unknown as {
   crmEgressStats?: EgressStats;
 };
 
-export const EGRESS_SAFE_MODE = process.env.EGRESS_SAFE_MODE === "true";
-export const DASHBOARD_CACHE_TTL_MS = EGRESS_SAFE_MODE ? 60_000 : 30_000;
-export const INTEGRATION_STATUS_CACHE_TTL_MS = 60_000;
-export const FEATURE_CACHE_TTL_MS = 5 * 60_000;
-export const DEFAULT_CONVERSATION_LIMIT = 25;
-export const MAX_CONVERSATION_LIMIT = EGRESS_SAFE_MODE ? 25 : 50;
-export const DEFAULT_MESSAGE_LIMIT = 50;
-export const MAX_MESSAGE_LIMIT = 50;
-export const DEFAULT_LIST_LIMIT = 50;
-export const MAX_LIST_LIMIT = EGRESS_SAFE_MODE ? 50 : 100;
-export const INBOX_LIST_POLL_MS = 30_000;
-export const SELECTED_CONVERSATION_POLL_MS = 15_000;
-export const DASHBOARD_REFRESH_MS = 60_000;
+export const EGRESS_SAFE_MODE = isEgressSafeMode;
+export const DASHBOARD_CACHE_TTL_MS = runtimeConfig.dashboardCacheMs;
+export const INTEGRATION_STATUS_CACHE_TTL_MS = runtimeConfig.integrationStatusCacheMs;
+export const FEATURE_CACHE_TTL_MS = runtimeConfig.featuresWorkspaceCacheMs;
+export const DEFAULT_CONVERSATION_LIMIT = runtimeConfig.initialConversationLimit;
+export const MAX_CONVERSATION_LIMIT = runtimeConfig.initialConversationLimit;
+export const DEFAULT_MESSAGE_LIMIT = runtimeConfig.initialMessageLimit;
+export const MAX_MESSAGE_LIMIT = runtimeConfig.initialMessageLimit;
+export const DEFAULT_LIST_LIMIT = runtimeConfig.initialLeadLimit;
+export const MAX_LIST_LIMIT = runtimeConfig.initialLeadLimit;
+export const INBOX_LIST_POLL_MS = runtimeConfig.inboxListRefreshMs;
+export const SELECTED_CONVERSATION_POLL_MS = runtimeConfig.selectedChatRefreshMs;
+export const DASHBOARD_REFRESH_MS = runtimeConfig.dashboardCacheMs;
 
 export const dashboardCache = globalEgress.crmDashboardCache ?? new Map<string, CacheEntry<DashboardPayload>>();
 export const integrationStatusCache =
@@ -215,7 +216,7 @@ export function getEgressDiagnostics() {
     warnings: [
       "Keep inbox lists paginated and message history lazy-loaded.",
       "Do not expose knowledge chunks or integration secrets in frontend API responses.",
-      "Avoid frontend polling below 30 seconds for lists and 10 seconds for selected conversations."
+      "Use EGRESS_SAFE_MODE=true only when strict egress-saving polling and cache windows are required."
     ]
   };
 }

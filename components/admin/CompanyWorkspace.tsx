@@ -138,10 +138,6 @@ export function CompanyWorkspace({ companyId }: { companyId: string }) {
     slug: company.slug,
     plan: company.plan,
     status: company.status,
-    ownerEmail: owner?.email ?? "No owner",
-    ownerUsername: owner?.username ?? "",
-    ownerName: owner?.name ?? "",
-    lastLoginAt: lastLogin,
     totalIntegrationsCount: company.integrations.length,
     connectedIntegrationsCount: integrationsConnected,
     errorIntegrationsCount: integrationsError

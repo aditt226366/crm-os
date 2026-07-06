@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -18,6 +18,8 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { useAppShell } from "@/components/app/AppLayout";
+import { runtimeConfig } from "@/lib/performance/runtimeConfig";
 
 type DashboardData = {
   metrics: Record<
@@ -67,6 +69,8 @@ type DashboardData = {
     campaigns: Array<{ id: string; name: string; goal: string; status: string; createdAt: string }>;
   };
 };
+
+const dashboardClientCache = new Map<string, DashboardData>();
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en", { maximumFractionDigits: 1 }).format(value);
@@ -121,17 +125,48 @@ function RecentList({
 }
 
 export function DashboardPage() {
-  const [data, setData] = useState<DashboardData | null>(null);
+  const { user } = useAppShell();
+  const cacheKey = user?.tenantId ?? user?.id ?? "anonymous";
+  const [data, setData] = useState<DashboardData | null>(() => dashboardClientCache.get(cacheKey) ?? null);
+  const [loading, setLoading] = useState(() => !dashboardClientCache.has(cacheKey));
+  const [refreshing, setRefreshing] = useState(() => dashboardClientCache.has(cacheKey));
   const [error, setError] = useState<string | null>(null);
 
+  const loadDashboard = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    if (!quiet && !dashboardClientCache.has(cacheKey)) setLoading(true);
+    if (quiet || dashboardClientCache.has(cacheKey)) setRefreshing(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/app/dashboard");
+      if (!response.ok) throw new Error("Unable to load dashboard");
+      const payload = (await response.json()) as DashboardData;
+      dashboardClientCache.set(cacheKey, payload);
+      setData(payload);
+    } catch (dashboardError) {
+      setError(dashboardError instanceof Error ? dashboardError.message : "Unable to load dashboard");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [cacheKey]);
+
   useEffect(() => {
-    fetch("/api/app/dashboard")
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Unable to load dashboard");
-        setData((await response.json()) as DashboardData);
-      })
-      .catch((dashboardError: Error) => setError(dashboardError.message));
-  }, []);
+    const cached = dashboardClientCache.get(cacheKey);
+    const startup = window.setTimeout(() => {
+      if (cached) {
+        setData(cached);
+        setLoading(false);
+      }
+      void loadDashboard({ quiet: Boolean(cached) });
+    }, 0);
+    const interval = window.setInterval(() => {
+      if (!document.hidden) void loadDashboard({ quiet: true });
+    }, runtimeConfig.dashboardCacheMs);
+    return () => {
+      window.clearTimeout(startup);
+      window.clearInterval(interval);
+    };
+  }, [cacheKey, loadDashboard]);
 
   const metricCards = useMemo(() => {
     if (!data) return [];
@@ -143,7 +178,7 @@ export function DashboardPage() {
     ] as const;
   }, [data]);
 
-  if (error) {
+  if (error && !data) {
     return (
       <GlassCard className="p-6">
         <p className="text-rose-100">{error}</p>
@@ -151,9 +186,11 @@ export function DashboardPage() {
     );
   }
 
-  if (!data) {
+  if (!data && loading) {
     return <LoadingSkeleton rows={12} />;
   }
+
+  if (!data) return null;
 
   return (
     <div className="space-y-6">
@@ -161,8 +198,11 @@ export function DashboardPage() {
         eyebrow="Dashboard"
         title="Company CRM Command Center"
         description="Tenant-scoped WhatsApp AI CRM metrics, inbox pressure, campaign signal, and order activity in one operational view."
-        actions={<StatusBadge value="LIVE DATA" />}
+        actions={<StatusBadge value={refreshing ? "REFRESHING" : "LIVE DATA"} />}
       />
+      {error ? (
+        <GlassCard className="border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-100">{error}</GlassCard>
+      ) : null}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {metricCards.map(([label, value, icon, detail]) => (

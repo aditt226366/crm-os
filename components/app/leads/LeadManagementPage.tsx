@@ -22,6 +22,8 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
 import { NeonButton } from "@/components/shared/NeonButton";
 import { StatusBadge } from "@/components/shared/StatusBadge";
+import { useAppShell } from "@/components/app/AppLayout";
+import { runtimeConfig } from "@/lib/performance/runtimeConfig";
 
 type IntegrationStatus = {
   type: string;
@@ -79,6 +81,8 @@ type LeadData = {
   leads: LeadRecord[];
 };
 
+const leadClientCache = new Map<string, LeadData>();
+
 type RunResult = {
   scanned: number;
   sent: number;
@@ -125,44 +129,49 @@ function formatDate(value: string | null) {
 }
 
 export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: string }) {
-  const [data, setData] = useState<LeadData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user } = useAppShell();
+  const cacheKey = user?.tenantId ?? user?.id ?? "anonymous";
+  const [data, setData] = useState<LeadData | null>(() => leadClientCache.get(cacheKey) ?? null);
+  const [loading, setLoading] = useState(() => !leadClientCache.has(cacheKey));
   const [running, setRunning] = useState(false);
-  const [autoSyncing, setAutoSyncing] = useState(false);
+  const [autoSyncing, setAutoSyncing] = useState(() => leadClientCache.has(cacheKey));
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [leadQuery, setLeadQuery] = useState(initialSearch);
   const [maxRows, setMaxRows] = useState(200);
   const flowRunningRef = useRef(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
     setError(null);
+    if (!quiet && !leadClientCache.has(cacheKey)) setLoading(true);
     setAutoSyncing(true);
     try {
-      const params = new URLSearchParams({ limit: "50" });
+      const params = new URLSearchParams({ limit: String(runtimeConfig.initialLeadLimit) });
       if (leadQuery.trim()) params.set("search", leadQuery.trim());
       const response = await fetch(`/api/app/leads?${params.toString()}`, { cache: "no-store" });
       const payload = await response.json();
       if (!response.ok) {
         throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
       }
+      leadClientCache.set(cacheKey, payload as LeadData);
       setData(payload as LeadData);
     } finally {
       setAutoSyncing(false);
+      setLoading(false);
     }
-  }, [leadQuery]);
+  }, [cacheKey, leadQuery]);
 
   useEffect(() => {
     let active = true;
 
     async function loadInitial() {
       try {
-        const response = await fetch("/api/app/leads?limit=50", { cache: "no-store" });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error?.message ?? payload.message ?? "Unable to load lead flow");
+        const cached = leadClientCache.get(cacheKey);
+        if (cached && active) {
+          setData(cached);
+          setLoading(false);
         }
-        if (active) setData(payload as LeadData);
+        await load({ quiet: Boolean(cached) });
       } catch (loadError) {
         if (active) setError(loadError instanceof Error ? loadError.message : "Unable to load lead flow");
       } finally {
@@ -174,7 +183,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
     return () => {
       active = false;
     };
-  }, []);
+  }, [cacheKey, load]);
 
   const ready = useMemo(() => data?.integrations.every((integration) => integration.ready) ?? false, [data]);
   const filteredLeads = useMemo(() => data?.leads ?? [], [data?.leads]);
@@ -198,6 +207,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
       if (!response.ok) {
         throw new Error(payload.error?.message ?? payload.message ?? "Lead flow failed");
       }
+      leadClientCache.set(cacheKey, payload as LeadData);
       setData(payload as LeadData);
       setResult(payload.result as RunResult);
     } catch (runError) {
@@ -207,7 +217,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
       else setRunning(false);
       flowRunningRef.current = false;
     }
-  }, [maxRows]);
+  }, [cacheKey, maxRows]);
 
   async function run(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -221,6 +231,15 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
     }, 400);
     return () => window.clearTimeout(timeout);
   }, [leadQuery, load, loading]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (!document.hidden && !flowRunningRef.current) {
+        load({ quiet: true }).catch((loadError: Error) => setError(loadError.message));
+      }
+    }, runtimeConfig.leadListRefreshMs);
+    return () => window.clearInterval(interval);
+  }, [load]);
 
   return (
     <FeatureGuard featureKey="LEAD_MANAGEMENT">
@@ -244,7 +263,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
           <GlassCard className="border-rose-300/20 bg-rose-300/10 p-4 text-sm text-rose-100">{error}</GlassCard>
         ) : null}
 
-        {loading || !data ? (
+        {!data ? (
           <LoadingSkeleton rows={8} />
         ) : (
           <>
@@ -323,7 +342,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                     </div>
                     <NeonButton loading={running} disabled={!ready} className="shrink-0">
                       <Play className="h-4 w-4" />
-                      Run Flow
+                      Import Leads & Send Template
                     </NeonButton>
                   </div>
                 </form>
