@@ -5,6 +5,7 @@ import { safeCreateAuditLog } from "@/lib/audit";
 import { resolveContactForPhone } from "@/lib/contact-identity";
 import { INTEGRATION_DEFINITIONS, type FeatureKey } from "@/lib/constants";
 import {
+  CRM_LEADS_RANGE,
   ensureGoogleSheetStatusColumn,
   readGoogleSheetLeads,
   updateGoogleSheetLeadStatuses,
@@ -124,6 +125,48 @@ async function safeRecordUsage(input: {
 
 function normalizedSheetStatus(status: string | null) {
   return status?.trim().toLowerCase() ?? "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function sheetLeadMetadata(lead: SheetLead): Prisma.InputJsonObject {
+  const googleSheet = {
+    source_sheet: lead.sourceSheet,
+    sourceSheet: lead.sourceSheet,
+    rowNumber: lead.rowNumber,
+    row: lead.row
+  };
+
+  return {
+    source_sheet: lead.sourceSheet,
+    googleSheet
+  };
+}
+
+function mergeSheetLeadMetadata(existing: unknown, lead: SheetLead): Prisma.InputJsonObject {
+  const current = asRecord(existing);
+  const currentGoogleSheet = asRecord(current.googleSheet);
+
+  return {
+    ...current,
+    source_sheet: lead.sourceSheet,
+    googleSheet: {
+      ...currentGoogleSheet,
+      source_sheet: lead.sourceSheet,
+      sourceSheet: lead.sourceSheet,
+      rowNumber: lead.rowNumber,
+      row: lead.row
+    }
+  };
+}
+
+function sourceSheetFromMetadata(metadata: unknown) {
+  const record = asRecord(metadata);
+  const googleSheet = asRecord(record.googleSheet);
+  const value = record.source_sheet ?? googleSheet.source_sheet ?? googleSheet.sourceSheet;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 async function activeMetaDeliveryLimitForContact({
@@ -342,6 +385,7 @@ export async function leadFlowSummary(tenantId: string, options: LeadFlowSummary
       status: true,
       temperature: true,
       source: true,
+      metadata: true,
       productInterest: true,
       updatedAt: true,
       createdAt: true,
@@ -422,6 +466,7 @@ export async function leadFlowSummary(tenantId: string, options: LeadFlowSummary
       status: lead.status,
       temperature: lead.temperature,
       source: lead.source,
+      sourceSheet: sourceSheetFromMetadata(lead.metadata),
       productInterest: lead.productInterest,
       updatedAt: lead.updatedAt.toISOString(),
       createdAt: lead.createdAt.toISOString(),
@@ -469,6 +514,8 @@ async function upsertLeadConversation({ tenantId, lead }: { tenantId: string; le
     tags: ["google-sheet"],
     customFields: {
       googleSheet: {
+        source_sheet: lead.sourceSheet,
+        sourceSheet: lead.sourceSheet,
         rowNumber: lead.rowNumber,
         row: lead.row
       }
@@ -501,7 +548,12 @@ async function upsertLeadConversation({ tenantId, lead }: { tenantId: string; le
     }));
 
   const existingLead = await prisma.lead.findFirst({
-    where: { tenantId, contactId: contact.id }
+    where: { tenantId, contactId: contact.id },
+    select: {
+      id: true,
+      status: true,
+      metadata: true
+    }
   });
 
   const crmLead = existingLead
@@ -511,6 +563,7 @@ async function upsertLeadConversation({ tenantId, lead }: { tenantId: string; le
           conversationId: conversation.id,
           source: "GOOGLE_SHEET",
           status: existingLead.status,
+          metadata: mergeSheetLeadMetadata(existingLead.metadata, lead),
           updatedAt: now
         }
       })
@@ -521,7 +574,8 @@ async function upsertLeadConversation({ tenantId, lead }: { tenantId: string; le
           conversationId: conversation.id,
           source: "GOOGLE_SHEET",
           temperature: "SCRAP",
-          status: "NEW"
+          status: "NEW",
+          metadata: sheetLeadMetadata(lead)
         }
       });
 
@@ -567,7 +621,6 @@ async function alreadySentTemplate({
 export async function runGoogleSheetLeadFlow({
   tenantId,
   userId,
-  range,
   maxRows
 }: {
   tenantId: string;
@@ -600,7 +653,7 @@ export async function runGoogleSheetLeadFlow({
     templatePurpose: "MAIN"
   });
   const template = mainTemplateMessageConfig.template;
-  const sheetRange = range || "A:Z";
+  const sheetRange = CRM_LEADS_RANGE;
   await ensureGoogleSheetStatusColumn({
     config: sheetsConfig,
     range: sheetRange,
@@ -624,6 +677,7 @@ export async function runGoogleSheetLeadFlow({
         status: "skipped",
         reason: `Sheet status is ${sheetStatus || "not new"}`,
         sheetStatus: sheetLead.status ?? null,
+        sourceSheet: sheetLead.sourceSheet,
         rowNumber: sheetLead.rowNumber
       });
       continue;
@@ -642,7 +696,13 @@ export async function runGoogleSheetLeadFlow({
         lead: sheetLead,
         status: "failure"
       });
-      results.push({ phone: contact.phone, status: "skipped", reason: "Contact opted out", rowNumber: sheetLead.rowNumber });
+      results.push({
+        phone: contact.phone,
+        status: "skipped",
+        reason: "Contact opted out",
+        sourceSheet: sheetLead.sourceSheet,
+        rowNumber: sheetLead.rowNumber
+      });
       continue;
     }
 
@@ -664,6 +724,7 @@ export async function runGoogleSheetLeadFlow({
         status: "META_DELIVERY_LIMITED",
         reason: failureReason,
         retryAfter: deliveryLimit.retryAfter,
+        sourceSheet: sheetLead.sourceSheet,
         rowNumber: sheetLead.rowNumber,
         sheetStatus: sheetLead.status ?? null
       });
@@ -679,6 +740,7 @@ export async function runGoogleSheetLeadFlow({
         phone: contact.phone,
         status: "skipped",
         reason: sheetUpdate.ok ? "Template already sent" : `Template already sent, but sheet update failed: ${sheetUpdate.error}`,
+        sourceSheet: sheetLead.sourceSheet,
         rowNumber: sheetLead.rowNumber,
         sheetStatus: sheetLead.status ?? null
       });
@@ -711,6 +773,8 @@ export async function runGoogleSheetLeadFlow({
       sheetRowNumber: sheetLead.rowNumber,
       sheetStatusColumnIndex: sheetLead.statusColumnIndex,
       sheetRange,
+      sheetSourceSheet: sheetLead.sourceSheet,
+      source_sheet: sheetLead.sourceSheet,
       leadSendGapMs: sendGapMs,
       variableMode: templateConfig.variableMode,
       variableMappings: templateConfig.variables,
@@ -770,7 +834,13 @@ export async function runGoogleSheetLeadFlow({
       units: 1,
       cost: sendResult.ok ? 0.006 : 0,
       status: sendResult.ok ? "SUCCESS" : "FAILED",
-      metadata: { messageId: outbound.message.id, templateName: template.name, sheetRowNumber: sheetLead.rowNumber }
+      metadata: {
+        messageId: outbound.message.id,
+        templateName: template.name,
+        sheetRange,
+        sheetRowNumber: sheetLead.rowNumber,
+        source_sheet: sheetLead.sourceSheet
+      }
     });
 
     const payload = {
@@ -787,7 +857,8 @@ export async function runGoogleSheetLeadFlow({
       retryAfter: immediateDeliveryLimit?.retryAfter,
       conversationId: conversation.id,
       messageId: outbound.message.id,
-      whatsappMessageId: sendResult.whatsappMessageId ?? null
+      whatsappMessageId: sendResult.whatsappMessageId ?? null,
+      sourceSheet: sheetLead.sourceSheet
     });
 
     let sheetUpdate: Awaited<ReturnType<typeof safeMarkSheetLeadMessaged>> | null = null;
@@ -802,6 +873,7 @@ export async function runGoogleSheetLeadFlow({
       ...results[results.length - 1],
       rowNumber: sheetLead.rowNumber,
       sheetStatus: sheetLead.status ?? null,
+      sourceSheet: sheetLead.sourceSheet,
       sheetUpdated: sheetUpdate ? sheetUpdate.ok : false,
       reason:
         (immediateDeliveryLimit ? metaDeliveryLimitReason(immediateDeliveryLimit) : sendResult.error) ??
@@ -815,7 +887,7 @@ export async function runGoogleSheetLeadFlow({
     action: "lead.google_sheet_flow_run",
     entityType: "Lead",
     newValue: {
-      range: range || "A:Z",
+      range: sheetRange,
       maxRows: maxRows ?? 200,
       scanned: sheetLeads.length,
       sent: results.filter((result) => result.status === "sent").length,

@@ -3,9 +3,13 @@ import { ApiError } from "@/lib/api";
 import type { IntegrationConfig } from "@/lib/integration-vault";
 import { normalizePhoneE164 } from "@/lib/phone/normalizePhone";
 
+export const CRM_LEADS_SHEET_NAME = "crm_leads";
+export const CRM_LEADS_RANGE = `${CRM_LEADS_SHEET_NAME}!A:Z`;
+
 export type SheetLead = {
   phone: string;
   name: string | null;
+  sourceSheet: string | null;
   status: string | null;
   statusColumnIndex: number | null;
   rowNumber: number;
@@ -16,6 +20,7 @@ type SheetShape = {
   rows: string[][];
   phoneIndex: number | null;
   nameIndex: number | null;
+  sourceSheetIndex: number | null;
   statusIndex: number | null;
   startsWithHeader: boolean;
   dataRows: string[][];
@@ -96,6 +101,12 @@ function statusCellRange(range: string, rowNumber: number, statusColumnIndex: nu
   return `${sheetPrefix(range)}${a1Column(statusColumnIndex)}${rowNumber}`;
 }
 
+function sheetLeadDedupeKeys(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+  const last10 = digits.length >= 10 ? digits.slice(-10) : "";
+  return [`phone:${phone}`, ...(last10 ? [`last10:${last10}`] : [])];
+}
+
 function explicitCountryCode(value: string) {
   const explicit = value.match(/\+\D*(\d[\d\s().-]{7,})/);
   if (!explicit) return null;
@@ -156,6 +167,7 @@ function sheetShape(values: unknown[][]): SheetShape {
       rows,
       phoneIndex: null,
       nameIndex: null,
+      sourceSheetIndex: null,
       statusIndex: null,
       startsWithHeader: false,
       dataRows: [],
@@ -172,6 +184,12 @@ function sheetShape(values: unknown[][]): SheetShape {
     /client[_\s-]*name/,
     /contact[_\s-]*name/
   ]);
+  const sourceSheetIndex = findHeaderIndex(headers, [
+    /^source[_\s-]*sheet$/,
+    /^source[_\s-]*tab$/,
+    /^sheet[_\s-]*source$/,
+    /^lead[_\s-]*source[_\s-]*sheet$/
+  ]);
   const statusIndex = findHeaderIndex(headers, [/^status$/, /message.*status/, /outreach/, /sent/]);
   const startsWithHeader = phoneIndex !== null || nameIndex !== null;
   const dataRows = startsWithHeader ? rows.slice(1) : rows;
@@ -181,6 +199,7 @@ function sheetShape(values: unknown[][]): SheetShape {
     rows,
     phoneIndex,
     nameIndex,
+    sourceSheetIndex,
     statusIndex,
     startsWithHeader,
     dataRows,
@@ -196,11 +215,14 @@ export function extractSheetLeads(values: unknown[][], maxRows: number) {
 
   for (const [index, row] of shape.dataRows.entries()) {
     const phone = inferPhone(row, shape.phoneIndex, shape.defaultCountryCode);
-    if (!phone || seen.has(phone)) continue;
-    seen.add(phone);
+    if (!phone) continue;
+    const dedupeKeys = sheetLeadDedupeKeys(phone);
+    if (dedupeKeys.some((key) => seen.has(key))) continue;
+    dedupeKeys.forEach((key) => seen.add(key));
     leads.push({
       phone,
       name: cell(row, shape.nameIndex) || null,
+      sourceSheet: cell(row, shape.sourceSheetIndex) || null,
       status: shape.statusIndex === null ? null : cell(row, shape.statusIndex) || null,
       statusColumnIndex: shape.statusIndex,
       rowNumber: (shape.startsWithHeader ? 2 : 1) + index,
@@ -309,7 +331,7 @@ async function batchPutGoogleSheetValues({
 
 export async function ensureGoogleSheetStatusColumn({
   config,
-  range = "A:Z",
+  range = CRM_LEADS_RANGE,
   defaultStatus = "new"
 }: {
   config: IntegrationConfig;
@@ -364,7 +386,7 @@ export async function ensureGoogleSheetStatusColumn({
 
 export async function readGoogleSheetLeads({
   config,
-  range = "A:Z",
+  range = CRM_LEADS_RANGE,
   maxRows = 50
 }: {
   config: IntegrationConfig;
@@ -377,7 +399,7 @@ export async function readGoogleSheetLeads({
 
 export async function updateGoogleSheetLeadStatuses({
   config,
-  range = "A:Z",
+  range = CRM_LEADS_RANGE,
   updates
 }: {
   config: IntegrationConfig;

@@ -492,6 +492,7 @@ model Lead {
   productInterest String?
   location        String?
   assignedUserId  String?
+  metadata        Json?
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ApiError } from "@/lib/api";
 import type { IntegrationType } from "@/lib/constants";
+import { CRM_LEADS_RANGE } from "@/lib/google-sheets-leads";
 import { runGoogleSheetLeadFlow } from "@/lib/lead-flow";
 import { prisma } from "@/lib/prisma";
 import { runDueScrapFollowUps, type ScrapFollowUpRunResult } from "@/lib/scrap-follow-up";
@@ -106,7 +107,7 @@ function configuredMaxRows() {
 }
 
 function configuredRange() {
-  return process.env.LEAD_SHEET_SYNC_RANGE?.trim() || "A:Z";
+  return CRM_LEADS_RANGE;
 }
 
 function autoSyncDisabled() {
@@ -246,7 +247,6 @@ export async function runGoogleSheetLeadFlowWithTenantLock(
 export async function runDueGoogleSheetLeadFlows({
   trigger = "scheduler",
   tenantId,
-  range = configuredRange(),
   maxRows = configuredMaxRows()
 }: {
   trigger?: string;
@@ -325,7 +325,6 @@ export async function runDueGoogleSheetLeadFlows({
           {
             tenantId: candidate.id,
             userId: actor.id,
-            range,
             maxRows
           },
           { skipIfRunning: true }

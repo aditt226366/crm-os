@@ -48,7 +48,6 @@ export async function POST(request: NextRequest) {
     const result = await runGoogleSheetLeadFlowWithTenantLock({
       tenantId,
       userId: user.id,
-      range: body.range || undefined,
       maxRows: body.maxRows
     });
     invalidateTenantEgressCaches(tenantId);

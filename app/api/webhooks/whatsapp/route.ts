@@ -6,7 +6,7 @@ import { upsertInboundConversationMessage, serializeConversation, serializeMessa
 import { emitTenantEvent } from "@/lib/realtime";
 import { whatsappWebhookMessageSchema } from "@/lib/validation";
 import { readEncryptedConfig } from "@/lib/integration-vault";
-import { readGoogleSheetLeads, updateGoogleSheetLeadStatuses } from "@/lib/google-sheets-leads";
+import { CRM_LEADS_RANGE, readGoogleSheetLeads, updateGoogleSheetLeadStatuses } from "@/lib/google-sheets-leads";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
 import { downloadWhatsAppMedia, messageTypeFromMime } from "@/lib/whatsapp-cloud";
 import {
@@ -232,8 +232,9 @@ async function updateLeadSheetStatusFromWebhook({
   if (metadataString(metadata, "adapter") !== "lead-google-sheets-flow") return;
 
   const rowNumber = metadataNumber(metadata, "sheetRowNumber");
-  const range = metadataString(metadata, "sheetRange") || "A:Z";
+  const range = metadataString(metadata, "sheetRange");
   let statusColumnIndex = metadataNumber(metadata, "sheetStatusColumnIndex");
+  if (range !== CRM_LEADS_RANGE) return;
   if (!rowNumber || rowNumber <= 0) return;
 
   const integration = await prisma.integration.findUnique({

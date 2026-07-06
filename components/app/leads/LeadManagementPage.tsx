@@ -46,6 +46,7 @@ type LeadRecord = {
   status: string;
   temperature: string;
   source: string;
+  sourceSheet: string | null;
   updatedAt: string;
   contact: {
     id: string;
@@ -102,6 +103,7 @@ const flowIcons: Record<string, typeof FileSpreadsheet> = {
   KNOWLEDGE_BASE: DatabaseZap,
   AI_MODEL: Bot
 };
+const MASTER_SHEET_TAB = "crm_leads";
 
 function metricCards(data: LeadData) {
   return [
@@ -130,7 +132,6 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [leadQuery, setLeadQuery] = useState(initialSearch);
-  const [range, setRange] = useState("A:Z");
   const [maxRows, setMaxRows] = useState(200);
   const flowRunningRef = useRef(false);
 
@@ -190,7 +191,6 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          range,
           maxRows
         })
       });
@@ -207,7 +207,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
       else setRunning(false);
       flowRunningRef.current = false;
     }
-  }, [maxRows, range]);
+  }, [maxRows]);
 
   async function run(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -300,12 +300,10 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                 </div>
                 <form onSubmit={run} className="mt-5 grid gap-3 md:grid-cols-[0.55fr_0.45fr]">
                   <label className="space-y-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Range</span>
-                    <input
-                      value={range}
-                      onChange={(event) => setRange(event.target.value)}
-                      className="h-11 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none"
-                    />
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sheet tab</span>
+                    <div className="flex h-11 w-full items-center rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm font-semibold text-white">
+                      {MASTER_SHEET_TAB}
+                    </div>
                   </label>
                   <label className="space-y-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rows</span>
@@ -388,7 +386,10 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                           <StatusBadge value={lead.temperature} />
                           <StatusBadge value={lead.status} />
                           <div className="min-w-0">
-                            <p className="truncate text-sm text-slate-300">{lead.conversation?.lastMessageText ?? lead.source.replaceAll("_", " ")}</p>
+                            <p className="truncate text-sm text-slate-300">
+                              {lead.conversation?.lastMessageText ?? lead.sourceSheet ?? lead.source.replaceAll("_", " ")}
+                            </p>
+                            {lead.sourceSheet ? <p className="mt-1 truncate text-xs text-slate-500">{lead.sourceSheet}</p> : null}
                             {lead.conversation?.lastMessageStatus ? <StatusBadge value={lead.conversation.lastMessageStatus} className="mt-2" /> : null}
                           </div>
                           <p className="text-right text-xs text-slate-500">{formatDate(lead.conversation?.lastMessageAt ?? lead.updatedAt)}</p>

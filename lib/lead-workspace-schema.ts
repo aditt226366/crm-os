@@ -119,6 +119,7 @@ const requiredColumns: Record<string, string[]> = {
     "productInterest",
     "location",
     "assignedUserId",
+    "metadata",
     "createdAt",
     "updatedAt"
   ],
@@ -696,6 +697,7 @@ const tableRepairStatements = [
   "productInterest" TEXT,
   "location" TEXT,
   "assignedUserId" TEXT,
+  "metadata" JSONB,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`,
@@ -713,6 +715,7 @@ const tableRepairStatements = [
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "productInterest" TEXT;`,
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "location" TEXT;`,
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "assignedUserId" TEXT;`,
+  `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "metadata" JSONB;`,
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
   `ALTER TABLE public."Lead" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
   dropNotNullIfColumnExists("Lead", "name"),

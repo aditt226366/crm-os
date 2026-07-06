@@ -43,7 +43,6 @@ async function run(request: NextRequest) {
   const summary = await runDueGoogleSheetLeadFlows({
     trigger: "cron",
     tenantId: request.nextUrl.searchParams.get("tenantId")?.trim() || undefined,
-    range: request.nextUrl.searchParams.get("range")?.trim() || undefined,
     maxRows: maxRowsParam(request)
   });
 
