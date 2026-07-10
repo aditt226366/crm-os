@@ -7,6 +7,7 @@ import {
   Clock3,
   FileSpreadsheet,
   MessageSquareText,
+  Plus,
   RadioTower,
   RefreshCw,
   Send,
@@ -185,6 +186,7 @@ export function BroadcastsPage() {
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [broadcastName, setBroadcastName] = useState("");
+  const [showCreate, setShowCreate] = useState(true);
 
   async function load() {
     const payload = await fetchBroadcastsData();
@@ -323,10 +325,16 @@ export function BroadcastsPage() {
           title="Broadcasts"
           description="Import an opted-in audience, select an approved WhatsApp template, and send tenant-scoped bulk messages."
           actions={
-            <NeonButton type="button" onClick={refresh} loading={busy === "refresh"}>
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </NeonButton>
+            <>
+              <NeonButton type="button" onClick={() => setShowCreate((value) => !value)}>
+                <Plus className="h-4 w-4" />
+                Create broadcast
+              </NeonButton>
+              <NeonButton type="button" variant="secondary" onClick={refresh} loading={busy === "refresh"}>
+                <RefreshCw className="h-4 w-4" />
+                Refresh
+              </NeonButton>
+            </>
           }
         />
 
@@ -380,6 +388,7 @@ export function BroadcastsPage() {
               ))}
             </section>
 
+            {showCreate ? (
             <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
               <GlassCard className="p-5">
                 <div className="flex items-center justify-between gap-3">
@@ -465,6 +474,7 @@ export function BroadcastsPage() {
                 </div>
               </GlassCard>
             </section>
+            ) : null}
 
             <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
               <GlassCard className="overflow-hidden">

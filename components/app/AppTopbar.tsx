@@ -2,13 +2,16 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, Building2, LogOut, Menu, Plus, Search, Sparkles } from "lucide-react";
+import { Building2, LogOut, Menu, Search } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useAppShell } from "@/components/app/AppLayout";
+import { useAppTheme } from "@/components/app/AppTheme";
 
 export function AppTopbar({ onOpenMobileSidebar }: { onOpenMobileSidebar: () => void }) {
   const router = useRouter();
   const { user, navigation, enabledFeatureSet } = useAppShell();
-  const whatsappConnected = user?.whatsapp.status === "CONNECTED";
+  const { theme } = useAppTheme();
+  const isLight = theme === "light";
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLDivElement | null>(null);
@@ -112,8 +115,15 @@ export function AppTopbar({ onOpenMobileSidebar }: { onOpenMobileSidebar: () => 
   }, []);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-white/10 bg-[#030712]/82 backdrop-blur-2xl">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-cyan-300/0 via-cyan-200/70 to-emerald-300/0" />
+    <header
+      className={cn(
+        "sticky top-0 z-40 border-b backdrop-blur-2xl",
+        isLight ? "border-neutral-200 bg-white/85" : "border-white/10 bg-[#030712]/82"
+      )}
+    >
+      {isLight ? null : (
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-cyan-300/0 via-cyan-200/70 to-emerald-300/0" />
+      )}
       <div className="flex min-h-[78px] items-center gap-3 px-4 sm:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <button
@@ -190,48 +200,14 @@ export function AppTopbar({ onOpenMobileSidebar }: { onOpenMobileSidebar: () => 
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <div
-            className={`hidden items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold sm:flex ${
-              whatsappConnected
-                ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
-                : "border-amber-300/20 bg-amber-300/10 text-amber-100"
-            }`}
-          >
-            <span className={`h-2 w-2 rounded-full ${whatsappConnected ? "bg-emerald-300" : "bg-amber-300"}`} />
-            <span>{whatsappConnected ? "WhatsApp live" : "Connect WhatsApp"}</span>
-          </div>
-          {enabledFeatureSet.has("BULK_MESSAGING") ? (
-            <button
-              type="button"
-              onClick={() => router.push("/app/broadcasts")}
-              className="hidden h-11 items-center gap-2 rounded-2xl border border-cyan-200/25 bg-cyan-200/[0.13] px-4 text-sm font-semibold text-cyan-50 shadow-[0_0_28px_rgba(34,211,238,0.13)] transition hover:border-cyan-100/50 hover:bg-cyan-200/[0.18] md:inline-flex"
-            >
-              <Plus className="h-4 w-4" />
-              Broadcast
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="grid h-11 w-11 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-slate-300 transition hover:border-cyan-200/35 hover:text-white"
-            aria-label="Notifications"
-          >
-            <Bell className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className="hidden h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.055] px-3 text-xs font-semibold text-slate-200 transition hover:border-cyan-200/35 hover:text-white lg:inline-flex"
-            title="Workspace intelligence"
-          >
-            <Sparkles className="h-4 w-4 text-cyan-100" />
-            Active
-          </button>
           <button
             type="button"
             onClick={logout}
-            className="grid h-11 w-11 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-slate-300 transition hover:border-rose-200/30 hover:text-rose-100"
+            className="inline-flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.055] px-4 text-sm font-semibold text-slate-200 transition hover:border-rose-200/30 hover:text-rose-100"
             aria-label="Logout"
           >
             <LogOut className="h-4 w-4" />
+            <span className="hidden sm:inline">Logout</span>
           </button>
         </div>
       </div>

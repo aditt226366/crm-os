@@ -15,7 +15,8 @@ import {
   Save,
   Send,
   Target,
-  Users
+  Users,
+  X
 } from "lucide-react";
 import { FeatureGuard } from "@/components/app/FeatureGuard";
 import { PageHeader } from "@/components/app/PageHeader";
@@ -186,6 +187,7 @@ export function AdsPage() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(initialForm);
   const [manualMap, setManualMap] = useState<Record<string, string>>({});
+  const [selectedAdId, setSelectedAdId] = useState<string | null>(null);
 
   async function load() {
     setData(await fetchAdsData());
@@ -482,6 +484,88 @@ export function AdsPage() {
     );
   }
 
+  const selectedAd = data?.campaigns.find((campaign) => campaign.id === selectedAdId) ?? null;
+
+  function renderAdDetail(campaign: AdCampaignRecord) {
+    return (
+      <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
+        <div className="grid gap-4 xl:grid-cols-[1fr_0.9fr_0.9fr]">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold text-white">{campaign.name}</h3>
+              <StatusBadge value={campaign.displayStatus} />
+            </div>
+            <p className="mt-2 text-sm text-slate-500">{campaign.objective} on {campaign.platform}</p>
+            <p className="mt-4 line-clamp-2 text-sm leading-6 text-slate-300">
+              {campaign.creativeConfig?.primaryText || "No primary text saved yet."}
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-400">
+              <span className="rounded-xl bg-white/[0.04] p-2">Budget: {campaign.budget?.dailyBudget || campaign.budget?.lifetimeBudget || "Draft"}</span>
+              <span className="rounded-xl bg-white/[0.04] p-2">Meta Ad ID: {campaign.metaAdId ?? "Not mapped"}</span>
+              <span className="rounded-xl bg-white/[0.04] p-2">Start: {formatDate(campaign.startDate)}</span>
+              <span className="rounded-xl bg-white/[0.04] p-2">End: {formatDate(campaign.endDate)}</span>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <p className="text-sm font-semibold text-white">Tracking</p>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+              <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Conversations {campaign.stats?.conversationsStarted ?? 0}</span>
+              <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Leads {campaign.stats?.leadsGenerated ?? 0}</span>
+              <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Hot {campaign.stats?.hotLeads ?? 0}</span>
+              <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Orders {campaign.stats?.ordersGenerated ?? 0}</span>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Insights sync coming after Meta Ads read permission is verified.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <p className="text-sm font-semibold text-white">Manual launch fallback</p>
+            <div className="mt-3 flex gap-2">
+              <input
+                value={manualMap[campaign.id] ?? ""}
+                onChange={(event) => setManualMap((current) => ({ ...current, [campaign.id]: event.target.value }))}
+                placeholder="Paste Meta Ad ID"
+                className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300/50"
+              />
+              <NeonButton
+                type="button"
+                loading={busy === `mark-manually-launched:${campaign.id}`}
+                onClick={() => action(campaign.id, "mark-manually-launched", { metaAdId: manualMap[campaign.id] })}
+              >
+                Map
+              </NeonButton>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <NeonButton type="button" loading={busy === `launch:${campaign.id}`} onClick={() => action(campaign.id, "launch")}>
+                <Rocket className="h-4 w-4" />
+                Launch
+              </NeonButton>
+              {campaign.status === "PAUSED" ? (
+                <NeonButton type="button" loading={busy === `resume:${campaign.id}`} onClick={() => action(campaign.id, "resume")}>
+                  <Play className="h-4 w-4" />
+                  Resume
+                </NeonButton>
+              ) : (
+                <NeonButton type="button" loading={busy === `pause:${campaign.id}`} onClick={() => action(campaign.id, "pause")}>
+                  <Pause className="h-4 w-4" />
+                  Pause
+                </NeonButton>
+              )}
+              <a href="https://adsmanager.facebook.com/" target="_blank" rel="noreferrer">
+                <NeonButton type="button">
+                  <ExternalLink className="h-4 w-4" />
+                  Open
+                </NeonButton>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <FeatureGuard featureKey="ADS">
       <div className="space-y-6">
@@ -491,16 +575,16 @@ export function AdsPage() {
           description="Create, track, and optimize Click-to-WhatsApp ads from your CRM."
           actions={
             <>
-              <NeonButton type="button" onClick={() => setShowWizard((value) => !value)}>
+              <NeonButton type="button" onClick={() => { setShowWizard(true); setStep(0); }}>
                 <Rocket className="h-4 w-4" />
                 Create Ad
               </NeonButton>
-              <NeonButton type="button" onClick={refresh} loading={busy === "refresh"}>
+              <NeonButton type="button" variant="secondary" onClick={refresh} loading={busy === "refresh"}>
                 <RefreshCw className="h-4 w-4" />
                 Sync Ads
               </NeonButton>
               <a href="https://adsmanager.facebook.com/" target="_blank" rel="noreferrer">
-                <NeonButton type="button">
+                <NeonButton type="button" variant="secondary">
                   <ExternalLink className="h-4 w-4" />
                   Meta Ads Manager
                 </NeonButton>
@@ -526,202 +610,170 @@ export function AdsPage() {
         {loading || !data ? (
           <LoadingSkeleton rows={9} />
         ) : (
-          <>
-            <GlassCard className="p-5">
-              <div className="grid gap-4 lg:grid-cols-4">
-                {[
-                  ["Meta Ads", data.connection.metaAds.connected, data.connection.metaAds.message],
-                  ["WhatsApp Cloud API", data.connection.whatsapp.connected, data.connection.whatsapp.message],
-                  ["Facebook Page", Boolean(data.connection.metaAds.pageName), data.connection.metaAds.pageName ?? "Missing"],
-                  ["Ad Account", Boolean(data.connection.metaAds.adAccountName), data.connection.metaAds.adAccountName ?? "Missing"]
-                ].map(([label, connected, message]) => (
-                  <div key={String(label)} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold text-white">{label}</p>
-                      <StatusBadge value={connected ? "CONNECTED" : "NOT_CONNECTED"} />
-                    </div>
-                    <p className="mt-3 text-xs leading-5 text-slate-500">{message}</p>
-                  </div>
-                ))}
-              </div>
-              {data.connection.metaAds.connected ? null : (
-                <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-100">
-                  Connect Meta Ads in Admin Integrations to publish ads directly. You can still create drafts and map manually launched ads.
-                </div>
-              )}
-            </GlassCard>
-
-            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              {metricCards(data).map(([label, value, Icon]) => (
-                <GlassCard key={label} className="p-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm text-slate-400">{label}</p>
-                    <Icon className="h-5 w-5 text-cyan-100" />
-                  </div>
-                  <p className="mt-4 text-2xl font-semibold text-white">{value}</p>
-                </GlassCard>
-              ))}
-            </section>
-
-            {showWizard ? (
+          <div className="grid gap-5 lg:grid-cols-[20rem_minmax(0,1fr)]">
+            {/* Side panel: analytics + existing ads */}
+            <div className="space-y-5">
               <GlassCard className="p-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">Ad creation wizard</h2>
-                    <p className="mt-1 text-sm text-slate-500">Step {step + 1} of {steps.length}: {steps[step]}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {steps.map((label, index) => (
-                      <button
-                        key={label}
-                        type="button"
-                        onClick={() => setStep(index)}
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
-                          index === step ? "border-cyan-300/40 bg-cyan-300/15 text-cyan-50" : "border-white/10 bg-white/[0.035] text-slate-400"
-                        )}
-                      >
-                        {index + 1}. {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <form className="mt-5 space-y-5" onSubmit={(event: FormEvent) => event.preventDefault()}>
-                  {stepContent()}
-                  <div className="flex flex-wrap justify-between gap-3 border-t border-white/10 pt-5">
-                    <NeonButton type="button" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>
-                      Previous
-                    </NeonButton>
-                    <div className="flex flex-wrap gap-2">
-                      <NeonButton type="button" onClick={() => saveAd("DRAFT")} loading={busy === "DRAFT"}>
-                        <Save className="h-4 w-4" />
-                        Save Draft
-                      </NeonButton>
-                      <NeonButton type="button" onClick={() => saveAd("READY_TO_PUBLISH")} loading={busy === "READY_TO_PUBLISH"}>
-                        <CheckCircle2 className="h-4 w-4" />
-                        Save as Ready
-                      </NeonButton>
-                      {step < steps.length - 1 ? (
-                        <NeonButton type="button" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))}>
-                          Next
-                        </NeonButton>
-                      ) : null}
+                <h2 className="text-lg font-semibold text-white">Ad analytics</h2>
+                <p className="mt-1 text-sm text-slate-500">Performance across your Click-to-WhatsApp ads.</p>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  {metricCards(data).map(([label, value, Icon]) => (
+                    <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs text-slate-400">{label}</p>
+                        <Icon className="h-4 w-4 text-cyan-100" />
+                      </div>
+                      <p className="mt-2 text-xl font-semibold text-white">{value}</p>
                     </div>
-                  </div>
-                </form>
-              </GlassCard>
-            ) : null}
-
-            <GlassCard className="p-5">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-white">Existing ads</h2>
-                  <p className="mt-1 text-sm text-slate-500">Drafts, ready ads, manual mappings, and CRM attribution.</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {filters.map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setFilter(value)}
-                      className={cn(
-                        "rounded-full border px-3 py-2 text-xs font-semibold transition",
-                        filter === value ? "border-cyan-300/40 bg-cyan-300/15 text-cyan-50" : "border-white/10 bg-white/[0.035] text-slate-400"
-                      )}
-                    >
-                      {label}
-                    </button>
                   ))}
                 </div>
-              </div>
+              </GlassCard>
 
-              <div className="mt-5 grid gap-4">
-                {filteredCampaigns.map((campaign) => (
-                  <div key={campaign.id} className="rounded-3xl border border-white/10 bg-white/[0.035] p-5">
-                    <div className="grid gap-4 xl:grid-cols-[1fr_0.9fr_0.9fr]">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold text-white">{campaign.name}</h3>
-                          <StatusBadge value={campaign.displayStatus} />
-                        </div>
-                        <p className="mt-2 text-sm text-slate-500">{campaign.objective} on {campaign.platform}</p>
-                        <p className="mt-4 line-clamp-2 text-sm leading-6 text-slate-300">
-                          {campaign.creativeConfig?.primaryText || "No primary text saved yet."}
-                        </p>
-                        <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-400">
-                          <span className="rounded-xl bg-white/[0.04] p-2">Budget: {campaign.budget?.dailyBudget || campaign.budget?.lifetimeBudget || "Draft"}</span>
-                          <span className="rounded-xl bg-white/[0.04] p-2">Meta Ad ID: {campaign.metaAdId ?? "Not mapped"}</span>
-                          <span className="rounded-xl bg-white/[0.04] p-2">Start: {formatDate(campaign.startDate)}</span>
-                          <span className="rounded-xl bg-white/[0.04] p-2">End: {formatDate(campaign.endDate)}</span>
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-                        <p className="text-sm font-semibold text-white">Tracking</p>
-                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                          <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Conversations {campaign.stats?.conversationsStarted ?? 0}</span>
-                          <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Leads {campaign.stats?.leadsGenerated ?? 0}</span>
-                          <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Hot {campaign.stats?.hotLeads ?? 0}</span>
-                          <span className="rounded-xl bg-white/[0.04] p-2 text-slate-400">Orders {campaign.stats?.ordersGenerated ?? 0}</span>
-                        </div>
-                        <p className="mt-3 text-xs leading-5 text-slate-500">
-                          Insights sync coming after Meta Ads read permission is verified.
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-                        <p className="text-sm font-semibold text-white">Manual launch fallback</p>
-                        <div className="mt-3 flex gap-2">
-                          <input
-                            value={manualMap[campaign.id] ?? ""}
-                            onChange={(event) => setManualMap((current) => ({ ...current, [campaign.id]: event.target.value }))}
-                            placeholder="Paste Meta Ad ID"
-                            className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-cyan-300/50"
-                          />
-                          <NeonButton
-                            type="button"
-                            loading={busy === `mark-manually-launched:${campaign.id}`}
-                            onClick={() => action(campaign.id, "mark-manually-launched", { metaAdId: manualMap[campaign.id] })}
-                          >
-                            Map
-                          </NeonButton>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <NeonButton type="button" loading={busy === `launch:${campaign.id}`} onClick={() => action(campaign.id, "launch")}>
-                            <Rocket className="h-4 w-4" />
-                            Launch
-                          </NeonButton>
-                          {campaign.status === "PAUSED" ? (
-                            <NeonButton type="button" loading={busy === `resume:${campaign.id}`} onClick={() => action(campaign.id, "resume")}>
-                              <Play className="h-4 w-4" />
-                              Resume
-                            </NeonButton>
-                          ) : (
-                            <NeonButton type="button" loading={busy === `pause:${campaign.id}`} onClick={() => action(campaign.id, "pause")}>
-                              <Pause className="h-4 w-4" />
-                              Pause
-                            </NeonButton>
+              <GlassCard className="p-5">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-lg font-semibold text-white">Existing ads</h2>
+                  <select
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value as (typeof filters)[number][0])}
+                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white outline-none focus:border-cyan-300/50"
+                  >
+                    {filters.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {filteredCampaigns.length ? (
+                    filteredCampaigns.map((campaign) => {
+                      const active = selectedAdId === campaign.id && !showWizard;
+                      return (
+                        <button
+                          key={campaign.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedAdId(campaign.id);
+                            setShowWizard(false);
+                          }}
+                          className={cn(
+                            "w-full rounded-2xl border p-3 text-left transition",
+                            active
+                              ? "border-cyan-300/35 bg-cyan-300/[0.10]"
+                              : "border-white/10 bg-white/[0.035] hover:border-cyan-300/25 hover:bg-white/[0.055]"
                           )}
-                          <a href="https://adsmanager.facebook.com/" target="_blank" rel="noreferrer">
-                            <NeonButton type="button">
-                              <ExternalLink className="h-4 w-4" />
-                              Open
-                            </NeonButton>
-                          </a>
-                        </div>
-                      </div>
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate text-sm font-semibold text-white">{campaign.name}</p>
+                            <StatusBadge value={campaign.displayStatus} />
+                          </div>
+                          <p className="mt-1 truncate text-xs text-slate-500">{campaign.objective}</p>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-sm text-slate-500">
+                      No ads match this filter. Click &ldquo;Create Ad&rdquo; to start.
+                    </div>
+                  )}
+                </div>
+              </GlassCard>
+            </div>
+
+            {/* Main area: wizard, ad detail, or connection overview */}
+            <div className="flex min-w-0 flex-col gap-5">
+              {showWizard ? (
+                <GlassCard className="relative flex flex-1 flex-col p-5">
+                  <button
+                    type="button"
+                    onClick={() => setShowWizard(false)}
+                    className="absolute right-4 top-4 z-10 grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-slate-300 transition hover:border-rose-200/30 hover:text-rose-100"
+                    aria-label="Close ad creation wizard"
+                    title="Close wizard"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                  <div className="flex flex-col gap-4 pr-12 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h2 className="text-lg font-semibold text-white">Ad creation wizard</h2>
+                      <p className="mt-1 text-sm text-slate-500">Step {step + 1} of {steps.length}: {steps[step]}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {steps.map((label, index) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => setStep(index)}
+                          className={cn(
+                            "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                            index === step ? "border-cyan-300/40 bg-cyan-300/15 text-cyan-50" : "border-white/10 bg-white/[0.035] text-slate-400"
+                          )}
+                        >
+                          {index + 1}. {label}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                ))}
-                {filteredCampaigns.length ? null : (
-                  <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-8 text-center text-sm text-slate-500">
-                    No ads match this filter. Create a Click-to-WhatsApp draft to start.
-                  </div>
-                )}
-              </div>
-            </GlassCard>
-          </>
+
+                  <form className="mt-5 flex flex-1 flex-col gap-5" onSubmit={(event: FormEvent) => event.preventDefault()}>
+                    <div className="flex-1">{stepContent()}</div>
+                    <div className="flex flex-wrap justify-between gap-3 border-t border-white/10 pt-5">
+                      <NeonButton type="button" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>
+                        Previous
+                      </NeonButton>
+                      <div className="flex flex-wrap gap-2">
+                        <NeonButton type="button" onClick={() => saveAd("DRAFT")} loading={busy === "DRAFT"}>
+                          <Save className="h-4 w-4" />
+                          Save Draft
+                        </NeonButton>
+                        <NeonButton type="button" onClick={() => saveAd("READY_TO_PUBLISH")} loading={busy === "READY_TO_PUBLISH"}>
+                          <CheckCircle2 className="h-4 w-4" />
+                          Save as Ready
+                        </NeonButton>
+                        {step < steps.length - 1 ? (
+                          <NeonButton type="button" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))}>
+                            Next
+                          </NeonButton>
+                        ) : null}
+                      </div>
+                    </div>
+                  </form>
+                </GlassCard>
+              ) : selectedAd ? (
+                renderAdDetail(selectedAd)
+              ) : (
+                <>
+                  <GlassCard className="p-5">
+                    <h2 className="text-lg font-semibold text-white">Connection status</h2>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      {[
+                        ["Meta Ads", data.connection.metaAds.connected, data.connection.metaAds.message],
+                        ["WhatsApp Cloud API", data.connection.whatsapp.connected, data.connection.whatsapp.message],
+                        ["Facebook Page", Boolean(data.connection.metaAds.pageName), data.connection.metaAds.pageName ?? "Missing"],
+                        ["Ad Account", Boolean(data.connection.metaAds.adAccountName), data.connection.metaAds.adAccountName ?? "Missing"]
+                      ].map(([label, connected, message]) => (
+                        <div key={String(label)} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-white">{label}</p>
+                            <StatusBadge value={connected ? "CONNECTED" : "NOT_CONNECTED"} />
+                          </div>
+                          <p className="mt-3 text-xs leading-5 text-slate-500">{message}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {data.connection.metaAds.connected ? null : (
+                      <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-100">
+                        Connect Meta Ads in Admin Integrations to publish ads directly. You can still create drafts and map manually launched ads.
+                      </div>
+                    )}
+                  </GlassCard>
+                  <GlassCard className="p-8 text-center text-sm text-slate-500">
+                    Select an ad on the left to see its details and controls, or click &ldquo;Create Ad&rdquo; to launch the wizard.
+                  </GlassCard>
+                </>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </FeatureGuard>

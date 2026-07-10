@@ -6,7 +6,9 @@ import type { FeatureKey } from "@/lib/constants";
 import { DASHBOARD_NAVIGATION, getEnabledNavigation } from "@/lib/constants";
 import { AppSidebar } from "@/components/app/AppSidebar";
 import { AppTopbar } from "@/components/app/AppTopbar";
+import { AppThemeFloatingToggle, AppThemeProvider, useAppTheme } from "@/components/app/AppTheme";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
+import { cn } from "@/lib/utils";
 
 type AppFeature = {
   id: string;
@@ -96,6 +98,15 @@ export function useAppShell() {
 }
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <AppThemeProvider>
+      <AppShell>{children}</AppShell>
+    </AppThemeProvider>
+  );
+}
+
+function AppShell({ children }: { children: React.ReactNode }) {
+  const { theme } = useAppTheme();
   const [user, setUser] = useState<AppUser | null>(null);
   const [features, setFeatures] = useState<AppFeature[]>([]);
   const [loading, setLoading] = useState(true);
@@ -185,7 +196,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       "LEAD_MANAGEMENT"
     ];
     enabledNavigation.sort((a, b) => ordered.indexOf(a.featureKey) - ordered.indexOf(b.featureKey));
-    return [DASHBOARD_NAVIGATION, ...enabledNavigation] satisfies AppNavigationItem[];
+    const settingsNavigation: AppNavigationItem = { featureKey: null, label: "Settings", href: "/app/settings" };
+    return [DASHBOARD_NAVIGATION, ...enabledNavigation, settingsNavigation] satisfies AppNavigationItem[];
   }, [features]);
 
   const value = useMemo(
@@ -200,9 +212,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     [enabledFeatureSet, features, loading, navigation, refreshShell, user]
   );
 
+  const shellThemeClass = cn("app-shell", theme === "light" ? "app-light" : "app-dark");
+
   if (loading) {
     return (
-      <main className="min-h-screen bg-[#030712] p-6 text-white">
+      <main className={cn(shellThemeClass, "min-h-screen p-6")}>
         <LoadingSkeleton rows={10} />
       </main>
     );
@@ -210,7 +224,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (error) {
     return (
-      <main className="min-h-screen bg-[#030712] p-6 text-white">
+      <main className={cn(shellThemeClass, "min-h-screen p-6")}>
         <div className="mx-auto mt-24 max-w-xl rounded-2xl border border-rose-300/20 bg-rose-300/10 p-5 text-rose-100">
           <p className="text-sm font-semibold">{error}</p>
         </div>
@@ -220,8 +234,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <AppShellContext.Provider value={value}>
-      <div className="min-h-screen bg-[#030712] text-white">
-        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(34,211,238,0.14),transparent_28rem),radial-gradient(circle_at_86%_16%,rgba(37,99,235,0.12),transparent_30rem),radial-gradient(circle_at_70%_86%,rgba(14,165,233,0.08),transparent_26rem)]" />
+      <div className={cn(shellThemeClass, "min-h-screen text-white")}>
+        <div className="app-glow pointer-events-none fixed inset-0" />
         <div className="grid-mask pointer-events-none fixed inset-0 opacity-50" />
         <div className="relative z-10 flex min-h-screen">
           <AppSidebar
@@ -248,6 +262,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </motion.main>
           </div>
         </div>
+        <AppThemeFloatingToggle />
       </div>
     </AppShellContext.Provider>
   );

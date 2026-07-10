@@ -1,16 +1,45 @@
+# Dependencies
 node_modules
+.npm-cache
+
+# Build output
 .next
 out
 dist
-.env
-.env*.local
-.data/
-!.env.example
-.npm-cache
 *.tsbuildinfo
+
+# Environment & secrets (never commit real credentials)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+service-account*.json
+gcp-*.json
+credentials.json
+secrets.json
+
+# Local runtime data
+.data/
+
+# Logs
+*.log
+next-dev.log
+next-dev.err.log
+npm-debug.log*
+
+# Test / QA artifacts
 design-qa.md
 playwright-report
 test-results
 artifacts
-next-dev.log
-next-dev.err.log
+coverage
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json

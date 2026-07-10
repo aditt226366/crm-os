@@ -213,8 +213,8 @@ html[data-wa-theme="dark"] .theme-light .wa-dots {
 
 /* Page background + ambient glow per theme */
 .admin-shell.admin-dark {
-  background-color: #030712;
-  color: #f8fafc;
+  background-color: #0b0f0e;
+  color: #e8eceb;
 }
 .admin-shell.admin-light {
   background-color: #e9edeb;
@@ -222,8 +222,8 @@ html[data-wa-theme="dark"] .theme-light .wa-dots {
 }
 .admin-shell.admin-dark .admin-glow {
   background:
-    radial-gradient(circle at 20% 12%, rgba(34, 211, 238, 0.12), transparent 28rem),
-    radial-gradient(circle at 85% 10%, rgba(37, 99, 235, 0.10), transparent 30rem);
+    radial-gradient(circle at 20% 12%, rgba(37, 211, 102, 0.10), transparent 28rem),
+    radial-gradient(circle at 85% 10%, rgba(37, 211, 102, 0.07), transparent 30rem);
 }
 .admin-shell.admin-light .admin-glow {
   background: radial-gradient(60% 40% at 50% 0%, rgba(37, 211, 102, 0.08), transparent 60%);
@@ -306,6 +306,257 @@ html[data-wa-theme="dark"] .theme-light .wa-dots {
 .admin-light .hover\:border-cyan-300\/50:hover { border-color: rgba(37, 211, 102, 0.45); }
 .admin-light .hover\:shadow-glow:hover { box-shadow: 0 6px 22px rgba(37, 211, 102, 0.16); }
 .admin-light .focus-visible\:ring-cyan-300:focus-visible { --tw-ring-color: rgba(37, 211, 102, 0.55); }
+
+/* ---------------------------------------------------------------------------
+   Admin panel gap-fills: the explicit `.admin-light` rules above miss a few
+   blue accents (e.g. the ENTERPRISE plan badge), so map the blue family to the
+   WhatsApp-green palette too — the panel should never show blue in light mode.
+--------------------------------------------------------------------------- */
+.admin-light [class*="text-blue"] { color: #0a7c3e; }
+.admin-light [class*="bg-blue-300"] { background-color: rgba(37, 211, 102, 0.10); }
+.admin-light [class*="border-blue"] { border-color: rgba(37, 211, 102, 0.35); }
+/* Slide-over drawers hard-code a near-black panel background */
+.admin-light [class*="050b16"],
+.admin-light [class*="030712"] { background-color: #ffffff; }
+/* SVG chart strokes in admin charts */
+.admin-light [class*="stroke-cyan"],
+.admin-light [class*="stroke-emerald"] { stroke: #0a7c3e; }
+
+/* ---------------------------------------------------------------------------
+   Company workspace (/app) → light / WhatsApp-green theme, matching the public
+   landing page and the admin panel. Scoped to `.app-light`; `.app-dark` keeps
+   the original console look. The app shell + pages use many themeable
+   slate/cyan/emerald utility classes, so this remaps them by shade family
+   (attribute-substring selectors catch every opacity variant) instead of
+   editing each page component.
+--------------------------------------------------------------------------- */
+
+/* Shell background + ambient glow per theme */
+.app-shell.app-dark {
+  background-color: #0b0f0e;
+  color: #e8eceb;
+}
+.app-shell.app-light {
+  background-color: #e9edeb;
+  color: #171717;
+}
+.app-shell.app-dark .app-glow {
+  background:
+    radial-gradient(circle at 18% 10%, rgba(37, 211, 102, 0.12), transparent 28rem),
+    radial-gradient(circle at 86% 16%, rgba(37, 211, 102, 0.08), transparent 30rem),
+    radial-gradient(circle at 70% 86%, rgba(37, 211, 102, 0.06), transparent 26rem);
+}
+.app-shell.app-light .app-glow {
+  background: radial-gradient(60% 40% at 50% 0%, rgba(37, 211, 102, 0.08), transparent 60%);
+}
+
+.app-light {
+  color-scheme: light;
+  color: #171717;
+}
+.app-light ::selection {
+  background: rgba(37, 211, 102, 0.24);
+  color: #04140b;
+}
+/* The dotted grid mask reads as noise on a light surface */
+.app-light .grid-mask { display: none; }
+
+/* Cards (GlassCard / glass-panel) → clean white cards */
+.app-light .glass-panel {
+  background: #ffffff;
+  border: 1px solid #d3dad7;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 10px 24px rgba(16, 24, 40, 0.07);
+  backdrop-filter: none;
+}
+.app-light .glass-panel::before { display: none; }
+
+/* Dark surfaces → white / light neutral */
+.app-light [class*="bg-slate-950"],
+.app-light [class*="bg-slate-900"],
+.app-light [class*="030712"] { background-color: #ffffff; }
+.app-light [class*="bg-slate-800"] { background-color: #d6ddda; }
+
+/* Subtle translucent-white overlays → light neutral fill.
+   (bg-white/85 in the topbar has no "[0" or "/10", so it stays white.) */
+.app-light [class*="bg-white/[0"],
+.app-light [class~="bg-white/10"] { background-color: #eef2f0; }
+
+/* Accent fills → WhatsApp green */
+.app-light [class~="bg-cyan-300"],
+.app-light [class~="bg-cyan-200"],
+.app-light [class~="bg-emerald-300"] { background-color: #25d366; }
+.app-light [class*="bg-cyan-300/"],
+.app-light [class*="bg-cyan-200/"],
+.app-light [class*="bg-emerald-300/"] { background-color: rgba(37, 211, 102, 0.12); }
+
+/* Semantic fills kept, just lightened */
+.app-light [class*="bg-rose-300/"],
+.app-light [class*="bg-rose-500/"] { background-color: rgba(244, 63, 94, 0.10); }
+.app-light [class*="bg-amber-300/"] { background-color: rgba(245, 158, 11, 0.12); }
+.app-light [class*="bg-blue-300"] { background-color: rgba(37, 211, 102, 0.10); }
+
+/* Text shades → neutral ink */
+.app-light [class*="text-white"],
+.app-light [class*="text-slate-50"],
+.app-light [class*="text-slate-100"] { color: #171717; }
+.app-light [class*="text-slate-200"] { color: #262626; }
+.app-light [class*="text-slate-300"] { color: #404040; }
+.app-light [class*="text-slate-400"] { color: #525252; }
+.app-light [class*="text-slate-500"] { color: #737373; }
+.app-light [class*="text-slate-600"] { color: #a3a3a3; }
+.app-light [class*="text-slate-950"] { color: #04140b; }
+
+/* Accent + blue text → green; semantic text kept */
+.app-light [class*="text-cyan"],
+.app-light [class*="text-emerald"],
+.app-light [class*="text-blue"] { color: #0a7c3e; }
+.app-light [class*="text-rose"] { color: #be123c; }
+.app-light [class*="text-amber"] { color: #b45309; }
+
+/* Borders */
+.app-light [class*="border-white/"],
+.app-light [class*="border-slate-950"],
+.app-light [class*="border-slate-900"] { border-color: #d6ddda; }
+.app-light [class*="border-cyan"],
+.app-light [class*="border-emerald"],
+.app-light [class*="border-blue"] { border-color: rgba(37, 211, 102, 0.35); }
+.app-light [class*="border-rose"] { border-color: rgba(244, 63, 94, 0.30); }
+.app-light [class*="border-amber"] { border-color: rgba(245, 158, 11, 0.35); }
+
+/* SVG chart strokes (rings, sparklines) */
+.app-light [class*="stroke-white"],
+.app-light [class*="stroke-slate"] { stroke: #d6ddda; }
+.app-light [class*="stroke-cyan"],
+.app-light [class*="stroke-emerald"] { stroke: #0a7c3e; }
+
+/* Neon glows → a soft flat green shadow (or none) */
+.app-light [class*="shadow-glow"] { box-shadow: 0 4px 20px rgba(37, 211, 102, 0.12); }
+.app-light [class*="shadow-["] { box-shadow: none; }
+
+/* Hover states — Tailwind's `hover:*` utilities have equal specificity to the
+   attribute-substring remap above and come later in source, so they win on
+   hover unless we override them explicitly. Without this, `hover:text-white`
+   paints white text on the light sidebar/rows → invisible under the pointer. */
+.app-light .hover\:text-white:hover { color: #171717; }
+.app-light .hover\:bg-white:hover { background-color: #1da851; }
+.app-light .hover\:bg-white\/\[0\.05\]:hover,
+.app-light .hover\:bg-white\/\[0\.055\]:hover,
+.app-light .hover\:bg-white\/\[0\.06\]:hover { background-color: #eef1f0; }
+.app-light .hover\:bg-cyan-300\/\[0\.10\]:hover,
+.app-light .hover\:bg-cyan-300\/10:hover { background-color: rgba(37, 211, 102, 0.12); }
+/* Group-hover icon/text (e.g. sidebar row icons) — Tailwind's
+   `.group:hover .group-hover\:text-*` beats the attribute remap, so the pale
+   cyan/white icons vanish on the light hover background. Re-tint to green ink. */
+.app-light .group:hover [class*="group-hover:text-cyan"],
+.app-light .group:hover [class*="group-hover:text-emerald"] { color: #0a7c3e; }
+.app-light .group:hover [class*="group-hover:text-white"],
+.app-light .group:hover [class*="group-hover:text-slate-100"] { color: #171717; }
+
+/* ---------------------------------------------------------------------------
+   Enable/disable switches (admin + user panels) — kept green, but a distinct
+   shade per theme: a deeper green in light, a brighter neon green in dark, with
+   a neutral gray track when OFF. Dedicated `.wa-switch*` classes so the global
+   color-remap above (which flattens cyan/emerald) never touches them.
+   --------------------------------------------------------------------------- */
+.wa-switch { background-color: #d6ddda; border-color: #cbd5cd; }
+.wa-switch-knob { background-color: #ffffff; box-shadow: 0 1px 3px rgba(2, 8, 23, 0.28); }
+
+/* Light theme — deeper green when ON */
+.admin-light .wa-switch[data-state="on"],
+.app-light .wa-switch[data-state="on"] { background-color: #16a34a; border-color: #16a34a; }
+.admin-light .wa-switch[data-state="off"],
+.app-light .wa-switch[data-state="off"] { background-color: #d6ddda; border-color: #cbd5cd; }
+
+/* Dark theme — neon green when ON, dark neutral track when OFF */
+.admin-dark .wa-switch[data-state="on"],
+.app-dark .wa-switch[data-state="on"] { background-color: #34d97a; border-color: #34d97a; }
+.admin-dark .wa-switch[data-state="off"],
+.app-dark .wa-switch[data-state="off"] { background-color: #232b28; border-color: #2f3a36; }
+.admin-dark .wa-switch-knob,
+.app-dark .wa-switch-knob { background-color: #eaf7ef; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); }
+
+/* ---------------------------------------------------------------------------
+   Dark theme for BOTH panels → the homepage's dark look (near-black,
+   green-tinted surfaces + green accents), NOT the old navy/cyan console.
+   Mirrors `html[data-wa-theme="dark"] .theme-light`. Scoped to
+   `.admin-dark` / `.app-dark`; converts the panels' slate/cyan classes by
+   shade family so every page follows without per-component edits.
+--------------------------------------------------------------------------- */
+:is(.admin-dark, .app-dark) {
+  color-scheme: dark;
+}
+:is(.admin-dark, .app-dark) ::selection {
+  background: rgba(37, 211, 102, 0.30);
+  color: #eafff1;
+}
+
+/* Cards (GlassCard / glass-panel) → dark green panels */
+:is(.admin-dark, .app-dark) .glass-panel {
+  background: #121815;
+  border: 1px solid #232b28;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  backdrop-filter: none;
+}
+:is(.admin-dark, .app-dark) .glass-panel::before { display: none; }
+
+/* Navy surfaces → dark green surfaces */
+:is(.admin-dark, .app-dark) [class*="bg-slate-950"],
+:is(.admin-dark, .app-dark) [class*="bg-slate-900"],
+:is(.admin-dark, .app-dark) [class*="030712"],
+:is(.admin-dark, .app-dark) [class*="050b16"] { background-color: #121815; }
+:is(.admin-dark, .app-dark) [class*="bg-slate-800"] { background-color: #1b2320; }
+
+/* translucent white overlays → subtle green-tinted fill */
+:is(.admin-dark, .app-dark) [class*="bg-white/[0"],
+:is(.admin-dark, .app-dark) [class~="bg-white/10"] { background-color: #1b2320; }
+
+/* accent fills → green */
+:is(.admin-dark, .app-dark) [class~="bg-cyan-300"],
+:is(.admin-dark, .app-dark) [class~="bg-cyan-200"],
+:is(.admin-dark, .app-dark) [class~="bg-emerald-300"] { background-color: #25d366; }
+:is(.admin-dark, .app-dark) [class*="bg-cyan-300/"],
+:is(.admin-dark, .app-dark) [class*="bg-cyan-200/"],
+:is(.admin-dark, .app-dark) [class*="bg-emerald-300/"],
+:is(.admin-dark, .app-dark) [class*="bg-blue-300"] { background-color: rgba(37, 211, 102, 0.14); }
+:is(.admin-dark, .app-dark) [class*="bg-rose-300/"],
+:is(.admin-dark, .app-dark) [class*="bg-rose-500/"] { background-color: rgba(244, 63, 94, 0.14); }
+:is(.admin-dark, .app-dark) [class*="bg-amber-300/"] { background-color: rgba(245, 158, 11, 0.14); }
+
+/* text shades → homepage dark ink */
+:is(.admin-dark, .app-dark) [class*="text-white"],
+:is(.admin-dark, .app-dark) [class*="text-slate-50"],
+:is(.admin-dark, .app-dark) [class*="text-slate-100"] { color: #f2f5f4; }
+:is(.admin-dark, .app-dark) [class*="text-slate-200"] { color: #e6ebe9; }
+:is(.admin-dark, .app-dark) [class*="text-slate-300"] { color: #d2d9d6; }
+:is(.admin-dark, .app-dark) [class*="text-slate-400"] { color: #a6afab; }
+:is(.admin-dark, .app-dark) [class*="text-slate-500"] { color: #8a938f; }
+:is(.admin-dark, .app-dark) [class*="text-slate-600"] { color: #6c746f; }
+
+/* accent + blue text → green; semantic text kept (dark variants) */
+:is(.admin-dark, .app-dark) [class*="text-cyan"],
+:is(.admin-dark, .app-dark) [class*="text-emerald"],
+:is(.admin-dark, .app-dark) [class*="text-blue"] { color: #34d97a; }
+:is(.admin-dark, .app-dark) [class*="text-rose"] { color: #fca5a5; }
+:is(.admin-dark, .app-dark) [class*="text-amber"] { color: #fcd34d; }
+
+/* borders */
+:is(.admin-dark, .app-dark) [class*="border-white/"],
+:is(.admin-dark, .app-dark) [class*="border-slate-9"] { border-color: #232b28; }
+:is(.admin-dark, .app-dark) [class*="border-cyan"],
+:is(.admin-dark, .app-dark) [class*="border-emerald"],
+:is(.admin-dark, .app-dark) [class*="border-blue"] { border-color: rgba(37, 211, 102, 0.35); }
+:is(.admin-dark, .app-dark) [class*="border-rose"] { border-color: rgba(244, 63, 94, 0.35); }
+:is(.admin-dark, .app-dark) [class*="border-amber"] { border-color: rgba(245, 158, 11, 0.35); }
+
+/* SVG chart strokes */
+:is(.admin-dark, .app-dark) [class*="stroke-white"],
+:is(.admin-dark, .app-dark) [class*="stroke-slate"] { stroke: #232b28; }
+:is(.admin-dark, .app-dark) [class*="stroke-cyan"],
+:is(.admin-dark, .app-dark) [class*="stroke-emerald"] { stroke: #34d97a; }
+
+/* glows → green accent / flatten arbitrary neon shadows */
+:is(.admin-dark, .app-dark) [class*="shadow-glow"] { box-shadow: 0 0 40px rgba(37, 211, 102, 0.18); }
+:is(.admin-dark, .app-dark) [class*="shadow-["] { box-shadow: none; }
 
 .no-scrollbar::-webkit-scrollbar {
   display: none;

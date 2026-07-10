@@ -5,18 +5,19 @@ import { Moon, Sun } from "lucide-react";
 
 type Theme = "light" | "dark";
 
-const AdminThemeContext = createContext<{ theme: Theme; toggle: () => void }>({
+const AppThemeContext = createContext<{ theme: Theme; toggle: () => void }>({
   theme: "light",
   toggle: () => {}
 });
 
-const STORAGE_KEY = "wa-admin-theme";
+const STORAGE_KEY = "wa-app-theme";
 
 /**
- * Light/dark theme for the admin panel only. Persisted to localStorage.
- * Light = the WhatsApp-green landing look; dark = the original console look.
+ * Light/dark theme for the company workspace (/app) only. Persisted to
+ * localStorage. Light = the WhatsApp-green landing look; dark = the original
+ * console look. Mirrors components/admin/AdminTheme.tsx.
  */
-export function AdminThemeProvider({ children }: { children: React.ReactNode }) {
+export function AppThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>("light");
   const [hydrated, setHydrated] = useState(false);
 
@@ -35,15 +36,15 @@ export function AdminThemeProvider({ children }: { children: React.ReactNode }) 
 
   const toggle = useCallback(() => setTheme((current) => (current === "light" ? "dark" : "light")), []);
 
-  return <AdminThemeContext.Provider value={{ theme, toggle }}>{children}</AdminThemeContext.Provider>;
+  return <AppThemeContext.Provider value={{ theme, toggle }}>{children}</AppThemeContext.Provider>;
 }
 
-export function useAdminTheme() {
-  return useContext(AdminThemeContext);
+export function useAppTheme() {
+  return useContext(AppThemeContext);
 }
 
-export function AdminThemeToggle() {
-  const { theme, toggle } = useAdminTheme();
+export function AppThemeToggle() {
+  const { theme, toggle } = useAppTheme();
   const isDark = theme === "dark";
   return (
     <button
@@ -51,16 +52,16 @@ export function AdminThemeToggle() {
       onClick={toggle}
       aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
       title={isDark ? "Light mode" : "Dark mode"}
-      className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-slate-300 transition hover:text-white"
+      className="grid h-11 w-11 place-items-center rounded-2xl border border-white/10 bg-white/[0.055] text-slate-300 transition hover:border-cyan-200/35 hover:text-white"
     >
       {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </button>
   );
 }
 
-/** Floating bottom-right light/dark switch for the admin console. */
-export function AdminThemeFloatingToggle() {
-  const { theme, toggle } = useAdminTheme();
+/** Floating bottom-right light/dark switch for the workspace. */
+export function AppThemeFloatingToggle() {
+  const { theme, toggle } = useAppTheme();
   const isDark = theme === "dark";
   return (
     <button

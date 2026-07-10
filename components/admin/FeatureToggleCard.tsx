@@ -30,12 +30,16 @@ export function FeatureToggleCard({
         </div>
         <button
           onClick={() => onToggle(feature)}
-          className="relative h-7 w-12 rounded-full border border-white/10 bg-slate-800 p-1 transition"
+          role="switch"
+          aria-checked={feature.enabled}
+          data-state={feature.enabled ? "on" : "off"}
+          className="wa-switch relative h-7 w-12 rounded-full border p-1 transition-colors"
           aria-label={`Toggle ${feature.name}`}
         >
           <motion.span
-            className="block h-5 w-5 rounded-full bg-cyan-200 shadow-glow"
-            animate={{ x: feature.enabled ? 20 : 0, opacity: feature.enabled ? 1 : 0.55 }}
+            className="wa-switch-knob block h-5 w-5 rounded-full"
+            animate={{ x: feature.enabled ? 20 : 0 }}
+            transition={{ type: "spring", stiffness: 500, damping: 34 }}
           />
         </button>
       </div>

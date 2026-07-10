@@ -70,7 +70,7 @@ function NavLinks({
               collapsed ? "justify-center" : "justify-start",
               active
                 ? "border-cyan-300/35 bg-cyan-300/[0.12] text-white shadow-glow"
-                : "border-transparent text-slate-400 hover:border-white/10 hover:bg-white/[0.055] hover:text-white"
+                : "border-transparent text-slate-400 hover:border-cyan-300/25 hover:bg-cyan-300/[0.10] hover:text-white"
             )}
           >
             <Icon className={cn("h-4 w-4 shrink-0", active ? "text-cyan-100" : "text-slate-500 group-hover:text-cyan-100")} />

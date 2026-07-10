@@ -7,21 +7,23 @@ import {
   Clock,
   Download,
   FileText,
+  Info,
   MessageSquarePlus,
   Paperclip,
   Search,
   Send,
   Smile,
-  Users
+  UserPlus,
+  Users,
+  X
 } from "lucide-react";
 import { FeatureGuard } from "@/components/app/FeatureGuard";
+import { useAppShell } from "@/components/app/AppLayout";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
 import { NeonButton } from "@/components/shared/NeonButton";
 import { StatusBadge } from "@/components/shared/StatusBadge";
-import { useAppShell } from "@/components/app/AppLayout";
 import { isMetaDeliveryLimitError } from "@/lib/meta-delivery-limit";
-import { runtimeConfig } from "@/lib/performance/runtimeConfig";
 import { cn } from "@/lib/utils";
 
 type Conversation = {
@@ -93,12 +95,11 @@ type MessageAttachment = {
 const filters = [
   ["all", "All"],
   ["unread", "Unread"],
-  ["assigned", "Assigned to me"],
   ["hot", "Hot"],
   ["warm", "Warm"],
   ["scrap", "Scrap"],
-  ["human-queue", "Human Queue"],
-  ["orders", "Orders"],
+  ["human-queue", "Human"],
+  ["orders", "Order"],
   ["broadcast", "Broadcast"],
   ["campaign", "Campaign"],
   ["ads", "Ads"]
@@ -108,59 +109,9 @@ type InboxFilter = (typeof filters)[number][0];
 
 const confirmedOrderStatuses = new Set(["CONFIRMED", "DISPATCHED", "COMPLETED"]);
 const emojiOptions = ["😀", "😂", "😊", "😍", "👍", "🙏", "🔥", "🎉", "✅", "❤️", "👌", "🤝", "😎", "😇", "🙌", "💯"];
+const INBOX_LIST_POLL_MS = 30_000;
+const SELECTED_CONVERSATION_POLL_MS = 15_000;
 const IDLE_POLL_PAUSE_MS = 2 * 60_000;
-const HIDDEN_INBOX_LIST_POLL_MS = 30_000;
-
-type CachedThread = {
-  messages: Message[];
-  hasMoreOlderMessages: boolean;
-};
-
-type InboxClientCache = {
-  conversations: Conversation[];
-  selectedId: string | null;
-  messagesByConversation: Map<string, CachedThread>;
-  lastConversationSync: string | null;
-};
-
-const inboxClientCaches = new Map<string, InboxClientCache>();
-
-function inboxClientCache(cacheKey: string) {
-  let cache = inboxClientCaches.get(cacheKey);
-  if (!cache) {
-    cache = {
-      conversations: [],
-      selectedId: null,
-      messagesByConversation: new Map(),
-      lastConversationSync: null
-    };
-    inboxClientCaches.set(cacheKey, cache);
-  }
-  return cache;
-}
-
-function writeInboxClientCache(cacheKey: string, patch: Partial<Omit<InboxClientCache, "messagesByConversation">>) {
-  const current = inboxClientCache(cacheKey);
-  inboxClientCaches.set(cacheKey, {
-    ...current,
-    ...patch
-  });
-}
-
-function readCachedThread(cacheKey: string, conversationId: string | null) {
-  if (!conversationId) return null;
-  return inboxClientCache(cacheKey).messagesByConversation.get(conversationId) ?? null;
-}
-
-function writeCachedThread(cacheKey: string, conversationId: string, thread: CachedThread) {
-  const current = inboxClientCache(cacheKey);
-  const messagesByConversation = new Map(current.messagesByConversation);
-  messagesByConversation.set(conversationId, thread);
-  inboxClientCaches.set(cacheKey, {
-    ...current,
-    messagesByConversation
-  });
-}
 
 function relativeTime(value: string | null) {
   if (!value) return "";
@@ -487,15 +438,17 @@ function MessageBubble({ message }: { message: Message }) {
 function Composer({
   selected,
   disabled,
+  assignedToMe,
   onSend,
-  onHumanTakeover,
+  onAssignToMe,
   onToggleAiReplies,
   onAttachment
 }: {
   selected: Conversation | null;
   disabled: boolean;
+  assignedToMe: boolean;
   onSend: (body: string) => Promise<void>;
-  onHumanTakeover: () => Promise<void>;
+  onAssignToMe: () => Promise<void>;
   onToggleAiReplies: (stopped: boolean) => Promise<void>;
   onAttachment: (file: File, caption?: string) => Promise<void>;
 }) {
@@ -539,14 +492,6 @@ function Composer({
       <div className="mb-3 flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={onHumanTakeover}
-          disabled={!selected || selected.humanTakeover}
-          className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {selected?.humanTakeover ? "In human queue" : "Assign to human"}
-        </button>
-        <button
-          type="button"
           onClick={() => selected && onToggleAiReplies(!selected.aiRepliesStopped)}
           disabled={!selected}
           className={cn(
@@ -557,6 +502,20 @@ function Composer({
           )}
         >
           {selected?.aiRepliesStopped ? "Resume AI replies" : "Stop AI replies"}
+        </button>
+        <button
+          type="button"
+          onClick={onAssignToMe}
+          disabled={!selected || assignedToMe}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-50",
+            assignedToMe
+              ? "border-cyan-300/30 bg-cyan-300/10 font-semibold text-cyan-100"
+              : "border-white/10 bg-white/[0.04] text-slate-300"
+          )}
+        >
+          <UserPlus className="h-3.5 w-3.5" />
+          {assignedToMe ? "Assigned to you" : "Assign to me"}
         </button>
       </div>
       <div className="flex items-end gap-2 rounded-[24px] border border-white/10 bg-white/[0.04] p-2">
@@ -628,105 +587,143 @@ function Composer({
   );
 }
 
-function ContactPanel({
+function ContactDrawer({
   selected,
-  onAddNote
+  open,
+  onClose,
+  onAddNote,
+  onHumanTakeover
 }: {
   selected: Conversation | null;
+  open: boolean;
+  onClose: () => void;
   onAddNote: (body: string) => Promise<void>;
+  onHumanTakeover: () => Promise<void>;
 }) {
   const [note, setNote] = useState("");
 
-  if (!selected) {
-    return (
-      <GlassCard className="hidden h-full p-5 xl:block">
-        <p className="text-sm text-slate-500">Select a conversation to inspect contact details.</p>
-      </GlassCard>
-    );
-  }
-
   return (
-    <GlassCard className="hidden h-full min-h-0 flex-col overflow-hidden xl:flex">
-      <div className="shrink-0 border-b border-white/10 p-5">
-        <div className="grid h-14 w-14 place-items-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-lg font-semibold text-cyan-100">
-          {selected.contact.name.slice(0, 2).toUpperCase()}
-        </div>
-        <h2 className="mt-4 text-xl font-semibold text-white">{selected.contact.name}</h2>
-        <p className="mt-1 text-sm text-slate-500">{selected.contact.phone}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <StatusBadge value={selected.contact.leadTemperature} />
-          <StatusBadge value={selected.source} />
-          {selected.contact.leadTemperatureOverride ? <StatusBadge value="MANUAL OVERRIDE" /> : null}
-          {selected.contact.tags.includes("SCRAP_DORMANT") ? <StatusBadge value="SCRAP_DORMANT" /> : null}
-        </div>
-      </div>
-      <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Engagement</p>
-          <p className="mt-3 text-sm text-slate-300">Inbound replies: {selected.customerReplyCount}</p>
-          <p className="mt-1 text-sm text-slate-300">Total messages: {selected.totalMessageCount}</p>
-          <p className="mt-1 text-sm text-slate-300">Status: {selected.status}</p>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Compliance</p>
-          <p className="mt-3 text-sm text-slate-300">Opt in: {selected.contact.optIn ? "Yes" : "No"}</p>
-          <p className="mt-1 text-sm text-slate-300">Opt out: {selected.contact.optOut ? "Yes" : "No"}</p>
-          <p className="mt-1 text-sm text-slate-300">
-            Window: {selected.customerServiceWindowExpiresAt ? new Date(selected.customerServiceWindowExpiresAt).toLocaleString() : "Closed"}
-          </p>
-        </div>
-        {selected.order ? (
-          <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-cyan-100/70">Linked order</p>
-            <p className="mt-2 font-semibold text-white">{selected.order.orderNumber}</p>
-            <StatusBadge value={selected.order.status} className="mt-3" />
-          </div>
+    <>
+      <div
+        className={cn(
+          "fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition",
+          open && selected ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+        )}
+        onClick={onClose}
+      />
+      <aside
+        className={cn(
+          "fixed inset-y-0 right-0 z-50 flex w-[min(24rem,calc(100vw-2rem))] flex-col border-l border-white/10 bg-slate-950/95 shadow-2xl backdrop-blur-2xl transition-transform duration-300",
+          open && selected ? "translate-x-0" : "translate-x-full"
+        )}
+      >
+        {selected ? (
+          <>
+            <div className="shrink-0 border-b border-white/10 p-5">
+              <div className="flex items-start justify-between">
+                <div className="grid h-14 w-14 place-items-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-lg font-semibold text-cyan-100">
+                  {selected.contact.name.slice(0, 2).toUpperCase()}
+                </div>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="Close contact details"
+                  className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-slate-300 transition hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <h2 className="mt-4 text-xl font-semibold text-white">{selected.contact.name}</h2>
+              <p className="mt-1 text-sm text-slate-500">{selected.contact.phone}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <StatusBadge value={selected.contact.leadTemperature} />
+                <StatusBadge value={selected.source} />
+                {selected.contact.leadTemperatureOverride ? <StatusBadge value="MANUAL OVERRIDE" /> : null}
+                {selected.contact.tags.includes("SCRAP_DORMANT") ? <StatusBadge value="SCRAP_DORMANT" /> : null}
+              </div>
+            </div>
+            <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Engagement</p>
+                <p className="mt-3 text-sm text-slate-300">Inbound replies: {selected.customerReplyCount}</p>
+                <p className="mt-1 text-sm text-slate-300">Total messages: {selected.totalMessageCount}</p>
+                <p className="mt-1 text-sm text-slate-300">Status: {selected.status}</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Compliance</p>
+                <p className="mt-3 text-sm text-slate-300">Opt in: {selected.contact.optIn ? "Yes" : "No"}</p>
+                <p className="mt-1 text-sm text-slate-300">Opt out: {selected.contact.optOut ? "Yes" : "No"}</p>
+                <p className="mt-1 text-sm text-slate-300">
+                  Window: {selected.customerServiceWindowExpiresAt ? new Date(selected.customerServiceWindowExpiresAt).toLocaleString() : "Closed"}
+                </p>
+              </div>
+              {selected.order ? (
+                <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-cyan-100/70">Linked order</p>
+                  <p className="mt-2 font-semibold text-white">{selected.order.orderNumber}</p>
+                  <StatusBadge value={selected.order.status} className="mt-3" />
+                </div>
+              ) : null}
+              <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <p className="text-sm font-semibold text-white">Escalate to a person</p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">Pause automation and add this chat to the Human Queue for an agent to take over.</p>
+                <NeonButton
+                  size="sm"
+                  variant="secondary"
+                  className="mt-3"
+                  disabled={selected.humanTakeover}
+                  onClick={onHumanTakeover}
+                >
+                  <Users className="h-4 w-4" />
+                  {selected.humanTakeover ? "In Human Queue" : "Add to Human Queue"}
+                </NeonButton>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <p className="text-sm font-semibold text-white">Internal note</p>
+                <textarea
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  placeholder="Add a private note..."
+                  className="mt-3 min-h-24 w-full resize-none rounded-2xl border border-white/10 bg-slate-950/60 p-3 text-sm text-white outline-none placeholder:text-slate-600"
+                />
+                <NeonButton
+                  size="sm"
+                  className="mt-3"
+                  disabled={!note.trim()}
+                  onClick={async () => {
+                    await onAddNote(note.trim());
+                    setNote("");
+                  }}
+                >
+                  <MessageSquarePlus className="h-4 w-4" />
+                  Add note
+                </NeonButton>
+              </div>
+            </div>
+          </>
         ) : null}
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-          <p className="text-sm font-semibold text-white">Internal note</p>
-          <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="Add a private note..."
-            className="mt-3 min-h-24 w-full resize-none rounded-2xl border border-white/10 bg-slate-950/60 p-3 text-sm text-white outline-none placeholder:text-slate-600"
-          />
-          <NeonButton
-            size="sm"
-            className="mt-3"
-            disabled={!note.trim()}
-            onClick={async () => {
-              await onAddNote(note.trim());
-              setNote("");
-            }}
-          >
-            <MessageSquarePlus className="h-4 w-4" />
-            Add note
-          </NeonButton>
-        </div>
-      </div>
-    </GlassCard>
+      </aside>
+    </>
   );
 }
 
 export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
-  const { user } = useAppShell();
-  const cacheKey = user?.tenantId ?? user?.id ?? "anonymous";
-  const initialInboxCache = useMemo(() => inboxClientCache(cacheKey), [cacheKey]);
-  const cachedThread = readCachedThread(cacheKey, initialInboxCache.selectedId);
-  const [conversations, setConversations] = useState<Conversation[]>(() => initialInboxCache.conversations);
-  const [selectedId, setSelectedId] = useState<string | null>(() => initialInboxCache.selectedId);
-  const [messages, setMessages] = useState<Message[]>(() => cachedThread?.messages ?? []);
-  const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(() => cachedThread?.hasMoreOlderMessages ?? false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [query, setQuery] = useState(initialSearch);
-  const [loadingList, setLoadingList] = useState(() => initialInboxCache.conversations.length === 0);
+  const [loadingList, setLoadingList] = useState(true);
   const [loadingThread, setLoadingThread] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAppShell();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadCardRef = useRef<HTMLDivElement | null>(null);
-  const lastConversationSyncRef = useRef<string | null>(initialInboxCache.lastConversationSync);
+  const lastConversationSyncRef = useRef<string | null>(null);
   const lastActivityRef = useRef(0);
 
   const visibleConversations = useMemo(
@@ -737,22 +734,6 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     () => conversations.find((conversation) => conversation.id === selectedId) ?? null,
     [conversations, selectedId]
   );
-
-  useEffect(() => {
-    writeInboxClientCache(cacheKey, {
-      conversations,
-      selectedId,
-      lastConversationSync: lastConversationSyncRef.current
-    });
-  }, [cacheKey, conversations, selectedId]);
-
-  useEffect(() => {
-    if (!selectedId) return;
-    writeCachedThread(cacheKey, selectedId, {
-      messages,
-      hasMoreOlderMessages
-    });
-  }, [cacheKey, hasMoreOlderMessages, messages, selectedId]);
 
   const serviceWindowClosed = useMemo(() => {
     if (!selected?.customerServiceWindowExpiresAt) return true;
@@ -766,7 +747,7 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
       const params = new URLSearchParams({
         filter,
         q: query,
-        limit: String(runtimeConfig.initialConversationLimit)
+        limit: "25"
       });
       if (delta && lastConversationSyncRef.current) {
         params.set("since", lastConversationSyncRef.current);
@@ -775,7 +756,6 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
       if (!response.ok) throw new Error("Unable to load conversations");
       const data = (await response.json()) as { conversations: Conversation[]; sync?: { since?: string } };
       lastConversationSyncRef.current = data.sync?.since ?? new Date().toISOString();
-      writeInboxClientCache(cacheKey, { lastConversationSync: lastConversationSyncRef.current });
       if (delta) {
         setConversations((current) =>
           data.conversations.reduce((rows, conversation) => upsertConversation(rows, conversation), current)
@@ -795,13 +775,13 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     } finally {
       if (!delta) setLoadingList(false);
     }
-  }, [cacheKey, filter, query]);
+  }, [filter, query]);
 
   const loadConversation = useCallback(async (conversationId: string, options: { scrollToBottom?: boolean; quiet?: boolean } = {}) => {
     const shouldScrollToBottom = options.scrollToBottom ?? true;
     if (!options.quiet) setLoadingThread(true);
     try {
-      const response = await fetch(`/api/app/inbox/conversations/${conversationId}?limit=${runtimeConfig.initialMessageLimit}`);
+      const response = await fetch(`/api/app/inbox/conversations/${conversationId}?limit=50`);
       if (!response.ok) throw new Error("Unable to load conversation");
       const data = (await response.json()) as {
         conversation: Conversation;
@@ -857,14 +837,13 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   useEffect(() => {
     const selectedConversationId = selected?.id;
     if (selectedConversationId) {
-      const cached = readCachedThread(cacheKey, selectedConversationId);
-      const timeout = setTimeout(() => loadConversation(selectedConversationId, { quiet: Boolean(cached) }), 0);
+      const timeout = setTimeout(() => loadConversation(selectedConversationId), 0);
       return () => clearTimeout(timeout);
     } else {
       const timeout = setTimeout(() => setMessages([]), 0);
       return () => clearTimeout(timeout);
     }
-  }, [cacheKey, loadConversation, selected?.id]);
+  }, [loadConversation, selected?.id]);
 
   useEffect(() => {
     const markActive = () => {
@@ -873,23 +852,14 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     markActive();
     const events: Array<keyof WindowEventMap> = ["focus", "mousemove", "keydown", "pointerdown", "touchstart"];
     events.forEach((event) => window.addEventListener(event, markActive, { passive: true }));
-    let cancelled = false;
-    let timer: number | null = null;
-    const scheduleNext = () => {
-      const delay = document.hidden ? HIDDEN_INBOX_LIST_POLL_MS : runtimeConfig.inboxListRefreshMs;
-      timer = window.setTimeout(() => {
-        if (cancelled) return;
-        if (document.hidden || Date.now() - lastActivityRef.current <= IDLE_POLL_PAUSE_MS) {
-          void loadConversations(null, { delta: true });
-        }
-        scheduleNext();
-      }, delay);
-    };
-    scheduleNext();
+    const interval = window.setInterval(() => {
+      if (document.hidden) return;
+      if (Date.now() - lastActivityRef.current > IDLE_POLL_PAUSE_MS) return;
+      void loadConversations(null, { delta: true });
+    }, INBOX_LIST_POLL_MS);
     return () => {
-      cancelled = true;
       events.forEach((event) => window.removeEventListener(event, markActive));
-      if (timer !== null) window.clearTimeout(timer);
+      window.clearInterval(interval);
     };
   }, [loadConversations]);
 
@@ -899,7 +869,7 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
       if (document.hidden) return;
       if (Date.now() - lastActivityRef.current > IDLE_POLL_PAUSE_MS) return;
       void loadConversation(selectedId, { scrollToBottom: false, quiet: true });
-    }, runtimeConfig.selectedChatRefreshMs);
+    }, SELECTED_CONVERSATION_POLL_MS);
     return () => window.clearInterval(interval);
   }, [loadConversation, selectedId]);
 
@@ -946,41 +916,12 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
 
   async function sendReply(body: string) {
     if (!selected) return;
-    const now = new Date().toISOString();
-    const optimisticMessage: Message = {
-      id: `optimistic-${selected.id}-${Date.now()}`,
-      conversationId: selected.id,
-      contactId: selected.contactId,
-      direction: "OUTBOUND",
-      type: "TEXT",
-      body,
-      templateId: null,
-      whatsappMessageId: null,
-      status: "PENDING",
-      failureReason: null,
-      metadata: { optimistic: true },
-      createdAt: now,
-      updatedAt: now
-    };
-    setMessages((current) => upsertMessage(current, optimisticMessage));
-    setConversations((current) =>
-      upsertConversation(current, {
-        ...selected,
-        lastMessageText: body,
-        lastMessageAt: now,
-        totalMessageCount: selected.totalMessageCount + 1
-      })
-    );
-    setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }), 0);
     try {
       const data = await postAction(`/api/app/inbox/conversations/${selected.id}/reply`, { body });
       if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
-      if (data.message) {
-        setMessages((current) => upsertMessage(current.filter((message) => message.id !== optimisticMessage.id), data.message!));
-      }
+      if (data.message) setMessages((current) => upsertMessage(current, data.message!));
       setNotice("Reply queued for WhatsApp delivery.");
     } catch (replyError) {
-      setMessages((current) => current.filter((message) => message.id !== optimisticMessage.id));
       setError(replyError instanceof Error ? replyError.message : "Reply failed");
     }
   }
@@ -993,6 +934,17 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
     });
     if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
     setNotice("Conversation added to Human Queue.");
+  }
+
+  async function assignToMe() {
+    if (!selected || !user) return;
+    try {
+      const data = await postAction(`/api/app/inbox/conversations/${selected.id}/assign`, { userId: user.id });
+      if (data.conversation) setConversations((current) => upsertConversation(current, data.conversation!));
+      setNotice("Conversation assigned to you.");
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : "Assign failed");
+    }
   }
 
   async function toggleAiReplies(stopped: boolean) {
@@ -1037,11 +989,6 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
   }
 
   function selectConversation(conversationId: string) {
-    const cached = readCachedThread(cacheKey, conversationId);
-    if (cached) {
-      setMessages(cached.messages);
-      setHasMoreOlderMessages(cached.hasMoreOlderMessages);
-    }
     setSelectedId(conversationId);
     window.setTimeout(() => {
       if (window.matchMedia("(max-width: 1023px)").matches) {
@@ -1064,7 +1011,7 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
           </div>
         </div>
 
-        <section className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[22rem_minmax(0,1fr)] xl:grid-cols-[22rem_minmax(0,1fr)_21rem]">
+        <section className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[22rem_minmax(0,1fr)]">
           <GlassCard className="flex max-h-[36rem] min-h-[24rem] flex-col overflow-hidden lg:max-h-none lg:min-h-0">
             <div className="shrink-0 border-b border-white/10 p-4">
               <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm">
@@ -1076,22 +1023,20 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
                   className="min-w-0 flex-1 bg-transparent text-white outline-none placeholder:text-slate-600"
                 />
               </div>
-              <div className="custom-scrollbar mt-3 flex gap-2 overflow-x-auto whitespace-nowrap pb-2">
-                {filters.map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setFilter(value)}
-                    className={cn(
-                      "shrink-0 rounded-full border px-3 py-2 text-xs font-semibold transition",
-                      filter === value
-                        ? "border-cyan-300/35 bg-cyan-300/10 text-cyan-100"
-                        : "border-white/10 bg-white/[0.04] text-slate-400 hover:text-white"
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="mt-3">
+                <label htmlFor="inbox-filter" className="sr-only">Filter conversations</label>
+                <select
+                  id="inbox-filter"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value as InboxFilter)}
+                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white outline-none transition focus:border-cyan-300/50"
+                >
+                  {filters.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
@@ -1132,8 +1077,20 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
                 ) : (
                   <p className="text-sm text-slate-500">Select a conversation</p>
                 )}
-                {selected?.humanTakeover ? <StatusBadge value="HUMAN TAKEOVER" /> : null}
-                {selected?.aiRepliesStopped ? <StatusBadge value="AI REPLIES STOPPED" /> : null}
+                <div className="flex shrink-0 items-center gap-2">
+                  {selected?.humanTakeover ? <StatusBadge value="HUMAN TAKEOVER" /> : null}
+                  {selected?.aiRepliesStopped ? <StatusBadge value="AI REPLIES STOPPED" /> : null}
+                  <button
+                    type="button"
+                    onClick={() => setDrawerOpen(true)}
+                    disabled={!selected}
+                    aria-label="Contact details"
+                    title="Contact details"
+                    className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-slate-300 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
 
               <div
@@ -1180,16 +1137,23 @@ export function InboxPage({ initialSearch = "" }: { initialSearch?: string }) {
               <Composer
                 selected={selected}
                 disabled={serviceWindowClosed}
+                assignedToMe={Boolean(user && selected?.assignedUserId === user.id)}
                 onSend={sendReply}
-                onHumanTakeover={humanTakeover}
+                onAssignToMe={assignToMe}
                 onToggleAiReplies={toggleAiReplies}
                 onAttachment={sendAttachment}
               />
             </GlassCard>
           </div>
-
-          <ContactPanel selected={selected} onAddNote={addNote} />
         </section>
+
+        <ContactDrawer
+          selected={selected}
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          onAddNote={addNote}
+          onHumanTakeover={humanTakeover}
+        />
       </div>
     </FeatureGuard>
   );

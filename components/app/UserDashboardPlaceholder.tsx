@@ -51,7 +51,7 @@ export function UserDashboardPlaceholder() {
 
   return (
     <main className="min-h-screen bg-[#030712] text-white">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(34,211,238,0.16),transparent_30rem),radial-gradient(circle_at_82%_12%,rgba(37,99,235,0.13),transparent_32rem)]" />
+      <div className="app-glow pointer-events-none fixed inset-0" />
       <div className="relative z-10 mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
         <header className="flex flex-wrap items-center justify-between gap-4 rounded-[28px] border border-white/10 bg-white/[0.035] p-4 backdrop-blur-2xl">
           <div className="flex items-center gap-3">
