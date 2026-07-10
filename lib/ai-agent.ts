@@ -65,17 +65,33 @@ function pickGeminiText(data: unknown) {
   return (data as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> } | null)?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 }
 
-async function generateAiReply(
-  config: IntegrationConfig,
-  messages: Array<{ direction: string; body: string }>,
-  knowledgeContext?: string
-): Promise<ProviderResult | null> {
+export type AiCompletionResult = {
+  text: string;
+  provider: string;
+  model: string;
+};
+
+/**
+ * Single-shot completion against the tenant's configured AI provider
+ * (OpenAI / Anthropic / Gemini / custom OpenAI-compatible). Returns null when
+ * the provider is unconfigured or returns no usable text. Shared by the inbound
+ * AI reply agent and other AI features (e.g. transcript appointment extraction).
+ */
+export async function generateAiCompletion({
+  config,
+  system,
+  user,
+  maxTokens = 220
+}: {
+  config: IntegrationConfig;
+  system: string;
+  user: string;
+  maxTokens?: number;
+}): Promise<AiCompletionResult | null> {
   const key = providerKey(config);
   const model = config.AI_MODEL_NAME?.trim() || (key === "ANTHROPIC" ? "claude-sonnet-4-6" : "gpt-4.1-mini");
   const apiKey = config.AI_API_KEY?.trim();
   if (!apiKey) return null;
-
-  const prompt = conversationPrompt(messages);
 
   if (key === "ANTHROPIC") {
     const response = await fetchJson("https://api.anthropic.com/v1/messages", {
@@ -87,13 +103,13 @@ async function generateAiReply(
       },
       body: JSON.stringify({
         model,
-        max_tokens: 220,
-        system: systemPrompt(knowledgeContext),
-        messages: [{ role: "user", content: prompt }]
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: user }]
       })
     });
-    const body = response.ok ? pickAnthropicText(response.data) : null;
-    return body ? { body, provider: "anthropic", model } : null;
+    const text = response.ok ? pickAnthropicText(response.data) : null;
+    return text ? { text, provider: "anthropic", model } : null;
   }
 
   if (key === "GEMINI") {
@@ -103,13 +119,13 @@ async function generateAiReply(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt(knowledgeContext) }] },
-          contents: [{ role: "user", parts: [{ text: prompt }] }]
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: "user", parts: [{ text: user }] }]
         })
       }
     );
-    const body = response.ok ? pickGeminiText(response.data) : null;
-    return body ? { body, provider: "gemini", model } : null;
+    const text = response.ok ? pickGeminiText(response.data) : null;
+    return text ? { text, provider: "gemini", model } : null;
   }
 
   const isCustom = key === "CUSTOM_OPENAI_COMPATIBLE";
@@ -125,14 +141,28 @@ async function generateAiReply(
     body: JSON.stringify({
       model,
       messages: [
-        { role: "system", content: systemPrompt(knowledgeContext) },
-        { role: "user", content: prompt }
+        { role: "system", content: system },
+        { role: "user", content: user }
       ],
-      max_tokens: 220
+      max_tokens: maxTokens
     })
   });
-  const body = response.ok ? pickOpenAiText(response.data) : null;
-  return body ? { body, provider: isCustom ? "custom-openai-compatible" : "openai", model } : null;
+  const text = response.ok ? pickOpenAiText(response.data) : null;
+  return text ? { text, provider: isCustom ? "custom-openai-compatible" : "openai", model } : null;
+}
+
+async function generateAiReply(
+  config: IntegrationConfig,
+  messages: Array<{ direction: string; body: string }>,
+  knowledgeContext?: string
+): Promise<ProviderResult | null> {
+  const completion = await generateAiCompletion({
+    config,
+    system: systemPrompt(knowledgeContext),
+    user: conversationPrompt(messages),
+    maxTokens: 220
+  });
+  return completion ? { body: completion.text, provider: completion.provider, model: completion.model } : null;
 }
 
 async function loadKnowledgeContext({

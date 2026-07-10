@@ -50,6 +50,15 @@ type LeadRecord = {
   source: string;
   sourceSheet: string | null;
   updatedAt: string;
+  campaign: {
+    key: string;
+    name: string;
+    status: string;
+    currentStep: number;
+    nextStepNumber: number | null;
+    nextSendAt: string | null;
+    deliveryStatus: string | null;
+  } | null;
   contact: {
     id: string;
     name: string;
@@ -395,9 +404,9 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
               {filteredLeads.length ? (
                 <div className="overflow-hidden rounded-[24px] border border-white/10">
                   <div className="custom-scrollbar max-h-[34rem] overflow-auto">
-                    <div className="min-w-[760px] divide-y divide-white/10">
+                    <div className="min-w-[860px] divide-y divide-white/10">
                       {filteredLeads.map((lead) => (
-                        <div key={lead.id} className="grid grid-cols-[1.15fr_0.75fr_0.75fr_1fr_0.75fr] items-center gap-4 bg-white/[0.025] px-4 py-4">
+                        <div key={lead.id} className="grid grid-cols-[1.1fr_0.65fr_0.65fr_1.35fr_0.75fr] items-center gap-4 bg-white/[0.025] px-4 py-4">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-white">{lead.contact.name}</p>
                             <p className="mt-1 truncate text-xs text-slate-500">{lead.contact.phone}</p>
@@ -409,6 +418,16 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                               {lead.conversation?.lastMessageText ?? lead.sourceSheet ?? lead.source.replaceAll("_", " ")}
                             </p>
                             {lead.sourceSheet ? <p className="mt-1 truncate text-xs text-slate-500">{lead.sourceSheet}</p> : null}
+                            {lead.campaign ? (
+                              <div className="mt-2 grid gap-1 text-xs leading-5 text-slate-400">
+                                <p className="truncate">Campaign: {lead.campaign.key}</p>
+                                <p className="truncate">Status: {lead.campaign.status}</p>
+                                <p className="truncate">Current Step: {lead.campaign.currentStep}</p>
+                                <p className="truncate">
+                                  Next Send Time: {lead.campaign.nextSendAt ? formatDate(lead.campaign.nextSendAt) : "None"}
+                                </p>
+                              </div>
+                            ) : null}
                             {lead.conversation?.lastMessageStatus ? <StatusBadge value={lead.conversation.lastMessageStatus} className="mt-2" /> : null}
                           </div>
                           <p className="text-right text-xs text-slate-500">{formatDate(lead.conversation?.lastMessageAt ?? lead.updatedAt)}</p>

@@ -231,56 +231,58 @@ enum TemplateStatus {
 }
 
 model User {
-  id                  String          @id @default(cuid())
-  tenantId            String?
-  tenant              Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name                String
-  email               String          @unique
-  username            String          @unique
-  passwordHash        String
-  role                Role
-  status              UserStatus      @default(ACTIVE)
-  lastLoginAt         DateTime?
-  forcePasswordReset  Boolean         @default(false)
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
-  updatedFeatures     TenantFeature[] @relation("FeatureUpdatedBy")
-  refreshTokens       RefreshToken[]
+  id                 String          @id @default(cuid())
+  tenantId           String?
+  tenant             Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  email              String          @unique
+  username           String          @unique
+  passwordHash       String
+  role               Role
+  status             UserStatus      @default(ACTIVE)
+  lastLoginAt        DateTime?
+  forcePasswordReset Boolean         @default(false)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  updatedFeatures    TenantFeature[] @relation("FeatureUpdatedBy")
+  refreshTokens      RefreshToken[]
 
   @@index([tenantId])
   @@index([role])
 }
 
 model Tenant {
-  id                  String               @id @default(cuid())
-  name                String
-  slug                String               @unique
-  status              TenantStatus         @default(ACTIVE)
-  plan                Plan                 @default(STARTER)
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
-  deactivatedAt       DateTime?
-  users               User[]
-  features            TenantFeature[]
-  integrations        Integration[]
-  usageLogs           ApiUsageLog[]
-  contacts            Contact[]
-  conversations       Conversation[]
-  messages            Message[]
-  leads               Lead[]
-  orders              Order[]
-  queueItems          HumanQueueItem[]
-  broadcasts          Broadcast[]
-  broadcastRecipients BroadcastRecipient[]
-  campaigns           Campaign[]
-  campaignRecipients  CampaignRecipient[]
-  adCampaigns         AdCampaign[]
-  workflows           Workflow[]
-  workflowRuns        WorkflowRun[]
-  workflowRunSteps    WorkflowRunStep[]
-  knowledgeDocuments  KnowledgeDocument[]
-  knowledgeChunks     KnowledgeChunk[]
-  whatsAppTemplates   WhatsAppTemplate[]
+  id                          String                         @id @default(cuid())
+  name                        String
+  slug                        String                         @unique
+  status                      TenantStatus                   @default(ACTIVE)
+  plan                        Plan                           @default(STARTER)
+  createdAt                   DateTime                       @default(now())
+  updatedAt                   DateTime                       @updatedAt
+  deactivatedAt               DateTime?
+  users                       User[]
+  features                    TenantFeature[]
+  integrations                Integration[]
+  usageLogs                   ApiUsageLog[]
+  contacts                    Contact[]
+  conversations               Conversation[]
+  messages                    Message[]
+  leads                       Lead[]
+  orders                      Order[]
+  queueItems                  HumanQueueItem[]
+  broadcasts                  Broadcast[]
+  broadcastRecipients         BroadcastRecipient[]
+  campaigns                   Campaign[]
+  campaignRecipients          CampaignRecipient[]
+  sourceAutomationCampaigns   AutomationCampaign[]
+  sourceAutomationEnrollments AutomationCampaignEnrollment[]
+  adCampaigns                 AdCampaign[]
+  workflows                   Workflow[]
+  workflowRuns                WorkflowRun[]
+  workflowRunSteps            WorkflowRunStep[]
+  knowledgeDocuments          KnowledgeDocument[]
+  knowledgeChunks             KnowledgeChunk[]
+  whatsAppTemplates           WhatsAppTemplate[]
 }
 
 model TenantFeature {
@@ -372,9 +374,9 @@ model RefreshToken {
 }
 
 model Contact {
-  id                            String               @id @default(cuid())
+  id                            String                         @id @default(cuid())
   tenantId                      String
-  tenant                        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant                        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name                          String
   phone                         String
   phoneRaw                      String?
@@ -383,20 +385,20 @@ model Contact {
   last10                        String?
   countryCode                   String?
   email                         String?
-  optIn                         Boolean              @default(true)
-  optOut                        Boolean              @default(false)
-  source                        ConversationSource   @default(ORGANIC)
-  tags                          String[]             @default([])
+  optIn                         Boolean                        @default(true)
+  optOut                        Boolean                        @default(false)
+  source                        ConversationSource             @default(ORGANIC)
+  tags                          String[]                       @default([])
   customFields                  Json?
-  leadTemperature               LeadTemperature      @default(SCRAP)
+  leadTemperature               LeadTemperature                @default(SCRAP)
   leadTemperatureOverride       LeadTemperature?
   leadTemperatureOverrideReason String?
-  customerReplyCount            Int                  @default(0)
-  totalMessageCount             Int                  @default(0)
+  customerReplyCount            Int                            @default(0)
+  totalMessageCount             Int                            @default(0)
   lastMessageAt                 DateTime?
   lastContactedAt               DateTime?
-  createdAt                     DateTime             @default(now())
-  updatedAt                     DateTime             @updatedAt
+  createdAt                     DateTime                       @default(now())
+  updatedAt                     DateTime                       @updatedAt
   conversations                 Conversation[]
   messages                      Message[]
   leads                         Lead[]
@@ -404,6 +406,7 @@ model Contact {
   queueItems                    HumanQueueItem[]
   broadcastRecipients           BroadcastRecipient[]
   campaignRecipients            CampaignRecipient[]
+  sourceAutomationEnrollments   AutomationCampaignEnrollment[]
 
   @@unique([tenantId, phone])
   @@index([tenantId, waId])
@@ -415,32 +418,33 @@ model Contact {
 }
 
 model Conversation {
-  id                             String               @id @default(cuid())
+  id                             String                         @id @default(cuid())
   tenantId                       String
-  tenant                         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant                         Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contactId                      String
-  contact                        Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact                        Contact                        @relation(fields: [contactId], references: [id], onDelete: Cascade)
   assignedUserId                 String?
-  source                         ConversationSource   @default(ORGANIC)
+  source                         ConversationSource             @default(ORGANIC)
   sourceId                       String?
-  status                         ConversationStatus   @default(OPEN)
-  unreadCount                    Int                  @default(0)
-  humanTakeover                  Boolean              @default(false)
+  status                         ConversationStatus             @default(OPEN)
+  unreadCount                    Int                            @default(0)
+  humanTakeover                  Boolean                        @default(false)
   humanQueueId                   String?
-  aiRepliesStopped               Boolean              @default(false)
-  customerReplyCount             Int                  @default(0)
-  totalMessageCount              Int                  @default(0)
+  aiRepliesStopped               Boolean                        @default(false)
+  customerReplyCount             Int                            @default(0)
+  totalMessageCount              Int                            @default(0)
   lastMessageText                String?
   lastMessageAt                  DateTime?
   customerServiceWindowExpiresAt DateTime?
-  createdAt                      DateTime             @default(now())
-  updatedAt                      DateTime             @updatedAt
+  createdAt                      DateTime                       @default(now())
+  updatedAt                      DateTime                       @updatedAt
   messages                       Message[]
   leads                          Lead[]
   orders                         Order[]
   queueItems                     HumanQueueItem[]
   broadcastRecipients            BroadcastRecipient[]
   campaignRecipients             CampaignRecipient[]
+  sourceAutomationEnrollments    AutomationCampaignEnrollment[]
 
   @@index([tenantId, lastMessageAt])
   @@index([tenantId, lastMessageAt, id])
@@ -478,23 +482,24 @@ model Message {
 }
 
 model Lead {
-  id              String             @id @default(cuid())
-  tenantId        String
-  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contactId       String
-  contact         Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  conversationId  String?
-  conversation    Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  source          ConversationSource @default(ORGANIC)
-  temperature     LeadTemperature    @default(SCRAP)
-  status          LeadStatus         @default(NEW)
-  score           Int                @default(0)
-  productInterest String?
-  location        String?
-  assignedUserId  String?
-  metadata        Json?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  id                          String                         @id @default(cuid())
+  tenantId                    String
+  tenant                      Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactId                   String
+  contact                     Contact                        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  conversationId              String?
+  conversation                Conversation?                  @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  source                      ConversationSource             @default(ORGANIC)
+  temperature                 LeadTemperature                @default(SCRAP)
+  status                      LeadStatus                     @default(NEW)
+  score                       Int                            @default(0)
+  productInterest             String?
+  location                    String?
+  assignedUserId              String?
+  metadata                    Json?
+  createdAt                   DateTime                       @default(now())
+  updatedAt                   DateTime                       @updatedAt
+  sourceAutomationEnrollments AutomationCampaignEnrollment[]
 
   @@index([tenantId, temperature])
   @@index([tenantId, source])
@@ -591,6 +596,80 @@ model CampaignRecipient {
 
   @@index([tenantId, campaignId])
   @@index([tenantId, status])
+}
+
+model AutomationCampaign {
+  id          String                         @id @default(cuid())
+  tenantId    String
+  tenant      Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key         String
+  name        String
+  sourceSheet String?
+  status      String                         @default("ACTIVE")
+  metadata    Json?
+  createdAt   DateTime                       @default(now())
+  updatedAt   DateTime                       @updatedAt
+  steps       AutomationCampaignStep[]
+  enrollments AutomationCampaignEnrollment[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId, status])
+  @@map("campaigns")
+}
+
+model AutomationCampaignStep {
+  id            String             @id @default(cuid())
+  campaignId    String
+  campaign      AutomationCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  stepNumber    Int
+  delayDays     Int
+  body          String             @db.Text
+  sendCondition String             @default("NO_INBOUND_REPLY_SINCE_START")
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([campaignId, stepNumber])
+  @@index([campaignId])
+  @@map("campaign_steps")
+}
+
+model AutomationCampaignEnrollment {
+  id                    String             @id @default(cuid())
+  tenantId              String
+  tenant                Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaignId            String
+  campaign              AutomationCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  leadId                String?
+  lead                  Lead?              @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contactId             String
+  contact               Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  conversationId        String?
+  conversation          Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  sourceSheet           String
+  status                String             @default("ACTIVE")
+  currentStep           Int                @default(0)
+  nextStepNumber        Int?
+  nextSendAt            DateTime?
+  campaignStartTime     DateTime           @default(now())
+  lastInboundMessageAt  DateTime?
+  lastScheduledFor      DateTime?
+  lastSentAt            DateTime?
+  lastDeliveryStatus    String?
+  lastMessageId         String?
+  lastWhatsAppMessageId String?
+  stepDeliveries        Json?
+  stoppedAt             DateTime?
+  stoppedReason         String?
+  failureReason         String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@unique([campaignId, contactId])
+  @@index([tenantId, status, nextSendAt])
+  @@index([tenantId, contactId])
+  @@index([tenantId, conversationId])
+  @@index([campaignId, status])
+  @@map("campaign_enrollments")
 }
 
 model AdCampaign {

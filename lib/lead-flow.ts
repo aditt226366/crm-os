@@ -23,6 +23,11 @@ import { emitTenantEvent } from "@/lib/realtime";
 import { type WhatsAppTemplateLead } from "@/lib/whatsapp-cloud";
 import { templateVariableConfig } from "@/lib/whatsapp-template-config";
 import {
+  enrollImportedLeadInSourceCampaign,
+  runDueSourceCampaignSteps,
+  type SourceCampaignRunResult
+} from "@/lib/source-campaigns";
+import {
   loadTenantTemplateMessageConfig,
   sendTemplateMessage,
   TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE
@@ -40,7 +45,6 @@ import {
 
 const FLOW_INTEGRATIONS = ["GOOGLE_SHEETS", "WHATSAPP_CLOUD", "WHATSAPP_TEMPLATE_SETTINGS", "KNOWLEDGE_BASE", "AI_MODEL"] as const;
 const DEFAULT_SEND_GAP_MS = 6000;
-const V9_SOURCE_SHEETS = new Set(["ug leads", "online mba leads"]);
 
 type FlowIntegration = {
   type: IntegrationType;
@@ -182,7 +186,12 @@ function sourceSheetFromMetadata(metadata: unknown) {
 function sourceWritebackSheetName(lead: SheetLead) {
   const sourceSheet = lead.sourceSheet?.trim();
   if (!sourceSheet) return null;
-  return V9_SOURCE_SHEETS.has(sourceSheet.toLowerCase()) ? sourceSheet : null;
+  // Write status back to the originating source tab for ANY lead that carries a
+  // source_sheet — not only registered campaign sheets. The one tab we must never
+  // write to is crm_leads: it is produced by a spill array formula that owns its
+  // output cells, so writing there throws "Array result was not expanded ...".
+  if (isCrmLeadsRange(googleSheetTabRange(sourceSheet))) return null;
+  return sourceSheet;
 }
 
 function sourceWritebackTarget(lead: SheetLead) {
@@ -320,7 +329,8 @@ async function safeMarkSheetLeadStatus({
     return {
       ok: false,
       skipped: false as const,
-      error: "crm_leads is read-only and this row has no valid source_sheet/source_row write-back target."
+      error:
+        "Missing source_sheet/source_row in crm_leads; status write-back skipped — check the crm_leads formula columns. Lead status is still tracked in the CRM."
     };
   }
 
@@ -528,6 +538,23 @@ export async function leadFlowSummary(tenantId: string, options: LeadFlowSummary
             }
           }
         }
+      },
+      sourceAutomationEnrollments: {
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+        select: {
+          status: true,
+          currentStep: true,
+          nextStepNumber: true,
+          nextSendAt: true,
+          lastDeliveryStatus: true,
+          campaign: {
+            select: {
+              key: true,
+              name: true
+            }
+          }
+        }
       }
     },
     orderBy: { updatedAt: "desc" },
@@ -569,41 +596,55 @@ export async function leadFlowSummary(tenantId: string, options: LeadFlowSummary
       warm: totals.find((row) => row.temperature === "WARM")?._count._all ?? 0,
       scrap: totals.find((row) => row.temperature === "SCRAP")?._count._all ?? 0
     },
-    leads: page.map((lead) => ({
-      id: lead.id,
-      status: lead.status,
-      temperature: lead.temperature,
-      source: lead.source,
-      sourceSheet: sourceSheetFromMetadata(lead.metadata),
-      productInterest: lead.productInterest,
-      updatedAt: lead.updatedAt.toISOString(),
-      createdAt: lead.createdAt.toISOString(),
-      contact: {
-        id: lead.contact.id,
-        name: lead.contact.name,
-        phone: lead.contact.phone,
-        phoneNormalized: lead.contact.phoneNormalized,
-        optOut: lead.contact.optOut,
-        customerReplyCount: lead.contact.customerReplyCount,
-        totalMessageCount: lead.contact.totalMessageCount,
-        lastCustomerMessageAt: lead.contact.lastMessageAt?.toISOString() ?? null,
-        lastContactedAt: lead.contact.lastContactedAt?.toISOString() ?? null
-      },
-      conversation: lead.conversation
-        ? (() => {
-            const latestMessage = lead.conversation.messages[0];
-            const deliveryLimit = activeMetaDeliveryLimitFromMessage(latestMessage);
-            return {
-              id: lead.conversation.id,
-              status: lead.conversation.status,
-              humanTakeover: lead.conversation.humanTakeover,
-              lastMessageText: lead.conversation.lastMessageText,
-              lastMessageAt: lead.conversation.lastMessageAt?.toISOString() ?? null,
-              lastMessageStatus: deliveryLimit ? "META_DELIVERY_LIMITED" : (latestMessage?.status ?? null)
-            };
-          })()
-        : null
-    })),
+    leads: page.map((lead) => {
+      const campaignEnrollment = lead.sourceAutomationEnrollments[0] ?? null;
+      return {
+        id: lead.id,
+        status: lead.status,
+        temperature: lead.temperature,
+        source: lead.source,
+        sourceSheet: sourceSheetFromMetadata(lead.metadata),
+        productInterest: lead.productInterest,
+        updatedAt: lead.updatedAt.toISOString(),
+        createdAt: lead.createdAt.toISOString(),
+        campaign: campaignEnrollment
+          ? {
+              key: campaignEnrollment.campaign.key,
+              name: campaignEnrollment.campaign.name,
+              status: campaignEnrollment.status,
+              currentStep: campaignEnrollment.currentStep,
+              nextStepNumber: campaignEnrollment.nextStepNumber,
+              nextSendAt: campaignEnrollment.nextSendAt?.toISOString() ?? null,
+              deliveryStatus: campaignEnrollment.lastDeliveryStatus
+            }
+          : null,
+        contact: {
+          id: lead.contact.id,
+          name: lead.contact.name,
+          phone: lead.contact.phone,
+          phoneNormalized: lead.contact.phoneNormalized,
+          optOut: lead.contact.optOut,
+          customerReplyCount: lead.contact.customerReplyCount,
+          totalMessageCount: lead.contact.totalMessageCount,
+          lastCustomerMessageAt: lead.contact.lastMessageAt?.toISOString() ?? null,
+          lastContactedAt: lead.contact.lastContactedAt?.toISOString() ?? null
+        },
+        conversation: lead.conversation
+          ? (() => {
+              const latestMessage = lead.conversation.messages[0];
+              const deliveryLimit = activeMetaDeliveryLimitFromMessage(latestMessage);
+              return {
+                id: lead.conversation.id,
+                status: lead.conversation.status,
+                humanTakeover: lead.conversation.humanTakeover,
+                lastMessageText: lead.conversation.lastMessageText,
+                lastMessageAt: lead.conversation.lastMessageAt?.toISOString() ?? null,
+                lastMessageStatus: deliveryLimit ? "META_DELIVERY_LIMITED" : (latestMessage?.status ?? null)
+              };
+            })()
+          : null
+      };
+    }),
     pagination: {
       limit,
       hasMore: leads.length > limit,
@@ -711,16 +752,18 @@ async function alreadySentTemplate({
   conversationId: string;
   templateId: string | null;
 }) {
-  if (!templateId) return false;
-
+  // When we have a concrete template id, dedupe on it. When we don't (no local
+  // WhatsAppTemplate row resolved yet), fall back to "any MAIN template already
+  // sent on this conversation" so a lead is never messaged twice across sheet
+  // sync runs — the CRM DB, not the sheet status, is the real dedupe source.
   const existing = await prisma.message.findFirst({
     where: {
       tenantId,
       conversationId,
-      templateId,
       direction: "OUTBOUND",
       type: "TEMPLATE",
-      status: { in: ["PENDING", "SENT", "DELIVERED", "READ"] }
+      status: { in: ["PENDING", "SENT", "DELIVERED", "READ"] },
+      ...(templateId ? { templateId } : {})
     },
     select: { id: true }
   });
@@ -789,19 +832,13 @@ export async function runGoogleSheetLeadFlow({
       continue;
     }
 
+    // When reading from the crm_leads master, a lead may be missing
+    // source_sheet/source_row (e.g. the formula columns are misconfigured). We
+    // still process the lead — the CRM DB is the source of truth for lead and
+    // campaign status — and simply skip the sheet write-back with a specific,
+    // actionable reason. We never fall back to writing status into crm_leads,
+    // which is spill-formula output and would throw a spill/overwrite error.
     const writebackTarget = sourceWritebackTarget(sheetLead);
-    if (sheetSource.readOnlyMaster && !writebackTarget) {
-      results.push({
-        phone: sheetLead.phone,
-        status: "skipped",
-        reason: "crm_leads row is missing a valid source_sheet/source_row write-back target.",
-        sheetStatus: sheetLead.status ?? null,
-        sourceSheet: sheetLead.sourceSheet,
-        sourceRow: sheetLead.sourceRow,
-        rowNumber: sheetLead.rowNumber
-      });
-      continue;
-    }
 
     const { contact, conversation } = await upsertLeadConversation({ tenantId, lead: sheetLead });
     const leadRecord = await prisma.lead.findFirst({
@@ -849,6 +886,78 @@ export async function runGoogleSheetLeadFlow({
         sourceSheet: sheetLead.sourceSheet,
         rowNumber: sheetLead.rowNumber,
         sheetStatus: sheetLead.status ?? null
+      });
+      continue;
+    }
+
+    const sourceCampaignEnrollment = await enrollImportedLeadInSourceCampaign({
+      tenantId,
+      leadId: leadRecord?.id,
+      contactId: contact.id,
+      conversationId: conversation.id,
+      sourceSheet: sheetLead.sourceSheet
+    });
+    if (sourceCampaignEnrollment) {
+      if (attemptedSends > 0 && sendGapMs > 0) {
+        await wait(sendGapMs);
+      }
+      attemptedSends += 1;
+
+      const campaignRun: SourceCampaignRunResult = await runDueSourceCampaignSteps({
+        tenantId,
+        userId,
+        enrollmentId: sourceCampaignEnrollment.enrollment.id,
+        maxSends: 1,
+        endpoint: "/api/app/leads"
+      });
+      const campaignResult = campaignRun.results[0] ?? null;
+      const campaignSent =
+        campaignResult?.status === "sent" ||
+        campaignResult?.status === "completed" ||
+        (!campaignResult && sourceCampaignEnrollment.enrollment.currentStep > 0);
+      const campaignFailed = campaignResult?.status === "failed";
+      let sheetUpdate: Awaited<ReturnType<typeof safeMarkSheetLeadMessaged>> | null = null;
+
+      if (campaignSent) {
+        if (leadRecord) {
+          await markCrmLeadContacted(leadRecord.id);
+        }
+        sheetUpdate = await safeMarkSheetLeadMessaged({
+          config: sheetsConfig,
+          range: sheetRange,
+          lead: sheetLead,
+          statusColumnCache
+        });
+      } else if (campaignFailed) {
+        await safeMarkSheetLeadStatus({
+          config: sheetsConfig,
+          range: sheetRange,
+          lead: sheetLead,
+          status: "failure",
+          statusColumnCache
+        });
+      }
+
+      results.push({
+        phone: contact.phone,
+        status: campaignSent ? "sent" : campaignFailed ? "failed" : "skipped",
+        reason:
+          campaignResult?.reason ??
+          (campaignSent
+            ? null
+            : sourceCampaignEnrollment.enrollment.status === "ACTIVE"
+              ? "Campaign already enrolled; no due step right now."
+              : `Campaign enrollment is ${sourceCampaignEnrollment.enrollment.status}`),
+        conversationId: conversation.id,
+        messageId: campaignResult?.messageId ?? null,
+        whatsappMessageId: campaignResult?.whatsappMessageId ?? null,
+        campaignKey: sourceCampaignEnrollment.campaign.key,
+        campaignStatus: sourceCampaignEnrollment.enrollment.status,
+        campaignStep: campaignResult?.stepNumber ?? sourceCampaignEnrollment.enrollment.currentStep,
+        sourceSheet: sheetLead.sourceSheet,
+        rowNumber: sheetLead.rowNumber,
+        sheetStatus: sheetLead.status ?? null,
+        sheetUpdated: sheetUpdate ? sheetUpdate.ok : false
       });
       continue;
     }

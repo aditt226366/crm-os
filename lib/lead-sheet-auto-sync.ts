@@ -5,12 +5,22 @@ import { CRM_LEADS_RANGE } from "@/lib/google-sheets-leads";
 import { runGoogleSheetLeadFlow } from "@/lib/lead-flow";
 import { prisma } from "@/lib/prisma";
 import { runDueScrapFollowUps, type ScrapFollowUpRunResult } from "@/lib/scrap-follow-up";
+import { runDueSourceCampaignSteps, type SourceCampaignRunResult } from "@/lib/source-campaigns";
+import { isGlobalSkincareTenant } from "@/lib/global-skincare-config";
+import { runGlobalSkincareAppointmentFollowUps } from "@/lib/global-skincare-appointments";
 
 const REQUIRED_FLOW_INTEGRATIONS: IntegrationType[] = [
   "GOOGLE_SHEETS",
   "WHATSAPP_CLOUD",
   "WHATSAPP_TEMPLATE_SETTINGS",
   "KNOWLEDGE_BASE",
+  "AI_MODEL"
+];
+// Global Skin Care's appointment follow-up flow does not require a knowledge base.
+const GLOBAL_SKINCARE_REQUIRED_INTEGRATIONS: IntegrationType[] = [
+  "GOOGLE_SHEETS",
+  "WHATSAPP_CLOUD",
+  "WHATSAPP_TEMPLATE_SETTINGS",
   "AI_MODEL"
 ];
 const LEAD_SYNC_LEASE_MS = 120_000;
@@ -21,10 +31,12 @@ type ScrapFollowUpResult = Pick<
   ScrapFollowUpRunResult,
   "scanned" | "sent" | "failed" | "skipped" | "dormant" | "templateMissing"
 >;
+type SourceCampaignResult = Pick<SourceCampaignRunResult, "scanned" | "sent" | "failed" | "skipped" | "stopped" | "completed">;
 
 type TenantCandidate = {
   id: string;
   name: string;
+  slug: string;
   integrations: Array<{ type: IntegrationType; status: string; lastVerificationError: string | null }>;
   users: Array<{ id: string; email: string; username: string; role: string }>;
 };
@@ -50,9 +62,18 @@ export type LeadSheetAutoSyncTenantRun = {
   failed?: number;
   skipped?: number;
   deliveryLimited?: number;
+  sourceCampaigns?: SourceCampaignResult;
   scrapFollowUps?: ScrapFollowUpResult;
   reason?: string;
   missingIntegrations?: IntegrationType[];
+  appointmentFollowUps?: {
+    scanned: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+    noAppointment: number;
+    templateMissing: boolean;
+  };
 };
 
 export type LeadSheetAutoSyncSummary = {
@@ -66,6 +87,12 @@ export type LeadSheetAutoSyncSummary = {
     failed: number;
     skipped: number;
     deliveryLimited: number;
+    sourceCampaignsScanned: number;
+    sourceCampaignsSent: number;
+    sourceCampaignsFailed: number;
+    sourceCampaignsSkipped: number;
+    sourceCampaignsStopped: number;
+    sourceCampaignsCompleted: number;
     scrapFollowUpsScanned: number;
     scrapFollowUpsSent: number;
     scrapFollowUpsFailed: number;
@@ -120,13 +147,16 @@ function autoSyncDisabled() {
   );
 }
 
-function missingConnectedIntegrations(candidate: TenantCandidate) {
+function missingConnectedIntegrations(
+  candidate: TenantCandidate,
+  required: IntegrationType[] = REQUIRED_FLOW_INTEGRATIONS
+) {
   const connected = new Set(
     candidate.integrations
       .filter((integration) => integration.status === "CONNECTED")
       .map((integration) => integration.type)
   );
-  return REQUIRED_FLOW_INTEGRATIONS.filter((type) => !connected.has(type));
+  return required.filter((type) => !connected.has(type));
 }
 
 async function leadSyncTenantCandidates(tenantId?: string) {
@@ -150,6 +180,7 @@ async function leadSyncTenantCandidates(tenantId?: string) {
     select: {
       id: true,
       name: true,
+      slug: true,
       integrations: {
         where: {
           type: { in: REQUIRED_FLOW_INTEGRATIONS }
@@ -270,6 +301,12 @@ export async function runDueGoogleSheetLeadFlows({
         failed: 0,
         skipped: 0,
         deliveryLimited: 0,
+        sourceCampaignsScanned: 0,
+        sourceCampaignsSent: 0,
+        sourceCampaignsFailed: 0,
+        sourceCampaignsSkipped: 0,
+        sourceCampaignsStopped: 0,
+        sourceCampaignsCompleted: 0,
         scrapFollowUpsScanned: 0,
         scrapFollowUpsSent: 0,
         scrapFollowUpsFailed: 0,
@@ -297,6 +334,78 @@ export async function runDueGoogleSheetLeadFlows({
     const runs: LeadSheetAutoSyncTenantRun[] = [];
 
     for (const candidate of candidates) {
+      // Company-specific (Global Skin Care): read call transcripts, extract the
+      // appointment with AI, and send the appointment follow-up template. This
+      // tenant does not run the generic crm_leads flow (which would misfire on
+      // the transcript tab).
+      if (isGlobalSkincareTenant(candidate)) {
+        const missingIntegrations = missingConnectedIntegrations(candidate, GLOBAL_SKINCARE_REQUIRED_INTEGRATIONS);
+        if (missingIntegrations.length) {
+          runs.push({
+            tenantId: candidate.id,
+            tenantName: candidate.name,
+            status: "skipped",
+            reason: `Missing connected integrations: ${missingIntegrations.join(", ")}`,
+            missingIntegrations
+          });
+          continue;
+        }
+
+        const actor = candidate.users.find((user) => user.role === "COMPANY_OWNER") ?? candidate.users[0];
+        if (!actor) {
+          runs.push({
+            tenantId: candidate.id,
+            tenantName: candidate.name,
+            status: "skipped",
+            reason: "No active company user found for appointment follow-ups."
+          });
+          continue;
+        }
+
+        try {
+          const appointment = await runGlobalSkincareAppointmentFollowUps({
+            tenantId: candidate.id,
+            userId: actor.id,
+            maxRows
+          });
+          runs.push({
+            tenantId: candidate.id,
+            tenantName: candidate.name,
+            actorUserId: actor.id,
+            status: appointment.sent > 0 ? "sent" : "skipped",
+            scanned: appointment.scanned,
+            sent: appointment.sent,
+            failed: appointment.failed,
+            skipped: appointment.skipped,
+            appointmentFollowUps: {
+              scanned: appointment.scanned,
+              sent: appointment.sent,
+              failed: appointment.failed,
+              skipped: appointment.skipped,
+              noAppointment: appointment.noAppointment,
+              templateMissing: appointment.templateMissing
+            },
+            reason:
+              appointment.reason ??
+              (appointment.sent > 0 ? undefined : "No transcripts needed an appointment follow-up.")
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Appointment follow-up run failed.";
+          runs.push({
+            tenantId: candidate.id,
+            tenantName: candidate.name,
+            actorUserId: actor.id,
+            status: "failed",
+            reason: message
+          });
+          console.error("[lead-sheet-auto-sync] global skincare appointment run failed", {
+            tenantId: candidate.id,
+            error: message
+          });
+        }
+        continue;
+      }
+
       const missingIntegrations = missingConnectedIntegrations(candidate);
       if (missingIntegrations.length) {
         runs.push({
@@ -341,11 +450,20 @@ export async function runDueGoogleSheetLeadFlows({
           continue;
         }
 
+        const sourceCampaigns = await runDueSourceCampaignSteps({
+          tenantId: candidate.id,
+          userId: actor.id
+        });
         const scrapFollowUps = await runDueScrapFollowUps({
           tenantId: candidate.id,
           userId: actor.id
         });
-        const anySent = result.sent > 0 || scrapFollowUps.sent > 0 || scrapFollowUps.dormant > 0;
+        const anySent =
+          result.sent > 0 ||
+          sourceCampaigns.sent > 0 ||
+          sourceCampaigns.completed > 0 ||
+          scrapFollowUps.sent > 0 ||
+          scrapFollowUps.dormant > 0;
         runs.push({
           tenantId: candidate.id,
           tenantName: candidate.name,
@@ -356,6 +474,14 @@ export async function runDueGoogleSheetLeadFlows({
           failed: result.failed,
           skipped: result.skipped,
           deliveryLimited: result.deliveryLimited,
+          sourceCampaigns: {
+            scanned: sourceCampaigns.scanned,
+            sent: sourceCampaigns.sent,
+            failed: sourceCampaigns.failed,
+            skipped: sourceCampaigns.skipped,
+            stopped: sourceCampaigns.stopped,
+            completed: sourceCampaigns.completed
+          },
           scrapFollowUps: {
             scanned: scrapFollowUps.scanned,
             sent: scrapFollowUps.sent,
@@ -395,6 +521,12 @@ export async function runDueGoogleSheetLeadFlows({
         failed: runs.reduce((sum, run) => sum + (run.failed ?? (run.status === "failed" ? 1 : 0)), 0),
         skipped: runs.reduce((sum, run) => sum + (run.skipped ?? (run.status === "skipped" ? 1 : 0)), 0),
         deliveryLimited: runs.reduce((sum, run) => sum + (run.deliveryLimited ?? 0), 0),
+        sourceCampaignsScanned: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.scanned ?? 0), 0),
+        sourceCampaignsSent: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.sent ?? 0), 0),
+        sourceCampaignsFailed: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.failed ?? 0), 0),
+        sourceCampaignsSkipped: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.skipped ?? 0), 0),
+        sourceCampaignsStopped: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.stopped ?? 0), 0),
+        sourceCampaignsCompleted: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.completed ?? 0), 0),
         scrapFollowUpsScanned: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.scanned ?? 0), 0),
         scrapFollowUpsSent: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.sent ?? 0), 0),
         scrapFollowUpsFailed: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.failed ?? 0), 0),

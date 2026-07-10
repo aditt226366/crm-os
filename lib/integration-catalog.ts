@@ -201,6 +201,37 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         group: "Scrap Follow-up Day 2",
         placeholder: "{\"variable_key\":\"lead.name\"}",
         helpText: "JSON mapping from the exact template variable key to a lead field, for example lead.name."
+      },
+      {
+        name: "APPOINTMENT_FOLLOWUP_TEMPLATE_NAME",
+        label: "Template name",
+        input: "text",
+        group: "Appointment Follow-up (Global Skin Care)",
+        placeholder: "appointment_follow_up",
+        helpText: "Optional. Approved Meta template used to follow up on an appointment detected from a call transcript. Only used for Global Skin Care."
+      },
+      {
+        name: "APPOINTMENT_FOLLOWUP_TEMPLATE_LANGUAGE",
+        label: "Language",
+        input: "select",
+        group: "Appointment Follow-up (Global Skin Care)",
+        options: ["en_US", "en", "ar", "hi", "es", "fr"]
+      },
+      {
+        name: "APPOINTMENT_FOLLOWUP_VARIABLE_MODE",
+        label: "Variable mode",
+        input: "select",
+        group: "Appointment Follow-up (Global Skin Care)",
+        options: ["NUMBERED", "NAMED"],
+        helpText: "Variable format used by the approved appointment follow-up template."
+      },
+      {
+        name: "APPOINTMENT_FOLLOWUP_VARIABLES",
+        label: "Variable mapping",
+        input: "textarea",
+        group: "Appointment Follow-up (Global Skin Care)",
+        placeholder: "{\"1\":\"lead.name\",\"2\":\"lead.appointment\"}",
+        helpText: "JSON mapping from template variable key to a lead field. Use lead.appointment for the detected appointment date/time."
       }
     ]
   },

@@ -1,5 +1,5 @@
 export type WhatsAppTemplateVariableMode = "NUMBERED" | "NAMED";
-export type WhatsAppTemplateRole = "MAIN" | "SCRAP_FOLLOWUP_1" | "SCRAP_FOLLOWUP_2";
+export type WhatsAppTemplateRole = "MAIN" | "SCRAP_FOLLOWUP_1" | "SCRAP_FOLLOWUP_2" | "APPOINTMENT_FOLLOWUP";
 
 export type TemplateVariableConfig = {
   role: WhatsAppTemplateRole;
@@ -33,6 +33,18 @@ const TEMPLATE_CONFIG = {
     languageFields: ["SCRAP_FOLLOWUP_2_TEMPLATE_LANGUAGE", "SCRAP_FOLLOW_UP_2_TEMPLATE_LANGUAGE", "WHATSAPP_TEMPLATE_LANGUAGE"],
     variableModeField: "SCRAP_FOLLOWUP_2_VARIABLE_MODE",
     variablesField: "SCRAP_FOLLOWUP_2_VARIABLES"
+  },
+  // Company-specific (Global Skin Care): appointment follow-up template used to
+  // remind a customer of the appointment extracted from their call transcript.
+  APPOINTMENT_FOLLOWUP: {
+    nameFields: ["APPOINTMENT_FOLLOWUP_TEMPLATE_NAME", "APPOINTMENT_TEMPLATE_NAME"],
+    languageFields: [
+      "APPOINTMENT_FOLLOWUP_TEMPLATE_LANGUAGE",
+      "APPOINTMENT_TEMPLATE_LANGUAGE",
+      "WHATSAPP_TEMPLATE_LANGUAGE"
+    ],
+    variableModeField: "APPOINTMENT_FOLLOWUP_VARIABLE_MODE",
+    variablesField: "APPOINTMENT_FOLLOWUP_VARIABLES"
   }
 } as const satisfies Record<
   WhatsAppTemplateRole,

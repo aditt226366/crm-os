@@ -368,6 +368,12 @@ export async function ensureGoogleSheetStatusColumn({
   range?: string;
   defaultStatus?: string;
 }) {
+  // Never stamp status into crm_leads: it is produced by a spill array formula
+  // that owns its output cells, so any write there throws
+  // "Array result was not expanded because it would overwrite data".
+  if (isCrmLeadsRange(range)) {
+    return { statusColumnIndex: null, initializedRows: 0 };
+  }
   const { spreadsheetId, token, values } = await readGoogleSheetValues({ config, range });
   const shape = sheetShape(values);
   if (!shape.rows.length) {
@@ -427,6 +433,33 @@ export async function readGoogleSheetLeads({
   return extractSheetLeads(values, maxRows);
 }
 
+/**
+ * Read a tab as a raw table: the first row is treated as headers and the rest as
+ * data rows (1-indexed by their real sheet row number). Used by callers that need
+ * arbitrary columns (e.g. call transcripts) rather than the lead-shaped extractor.
+ */
+export async function readGoogleSheetTable({
+  config,
+  range
+}: {
+  config: IntegrationConfig;
+  range: string;
+}): Promise<{
+  headers: string[];
+  rows: Array<{ rowNumber: number; cells: string[] }>;
+}> {
+  const { values } = await readGoogleSheetValues({ config, range });
+  if (!values.length) {
+    return { headers: [], rows: [] };
+  }
+  const headers = values[0].map((value) => String(value ?? ""));
+  const rows = values.slice(1).map((row, index) => ({
+    rowNumber: index + 2,
+    cells: row.map((value) => String(value ?? ""))
+  }));
+  return { headers, rows };
+}
+
 export async function updateGoogleSheetLeadStatuses({
   config,
   range = DEFAULT_LEAD_SHEET_RANGE,
@@ -438,6 +471,11 @@ export async function updateGoogleSheetLeadStatuses({
 }) {
   const spreadsheetId = config.GOOGLE_SHEETS_ID?.trim();
   if (!spreadsheetId || !updates.length) {
+    return [];
+  }
+
+  // Guard: crm_leads is spill-formula output and must never be written to.
+  if (isCrmLeadsRange(range)) {
     return [];
   }
 

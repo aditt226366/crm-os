@@ -35,6 +35,7 @@ export type WhatsAppTemplateLead = {
   phone?: string | null;
   status?: string | null;
   row?: string[] | null;
+  appointment?: string | null;
 };
 
 function graphApiVersion() {
@@ -277,6 +278,14 @@ function variableValueFromPath(path: string, lead?: WhatsAppTemplateLead) {
   }
   if (normalized === "lead.status" || normalized === "status") {
     return lead?.status?.trim() || "new";
+  }
+  if (
+    normalized === "lead.appointment" ||
+    normalized === "appointment" ||
+    normalized === "appointment.datetime" ||
+    normalized === "lead.appointment.datetime"
+  ) {
+    return lead?.appointment?.trim() || "your appointment";
   }
   const rowMatch = normalized.match(/^lead\.row\[(\d+)\]$/);
   if (rowMatch) {

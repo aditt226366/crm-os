@@ -14,6 +14,12 @@ import {
 } from "@/lib/google-sheets-leads";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
 import { downloadWhatsAppMedia, messageTypeFromMime } from "@/lib/whatsapp-cloud";
+import { isSourceCampaignSheet } from "@/lib/source-campaign-config";
+import {
+  stopActiveSourceCampaignsForContact,
+  updateSourceCampaignDeliveryStatusFromWebhook,
+  type CampaignDeliveryStatus
+} from "@/lib/source-campaigns";
 import {
   createMetaDeliveryLimit,
   isMetaDeliveryLimitError,
@@ -21,11 +27,10 @@ import {
   withContactMetaDeliveryLimit,
   withMetaDeliveryLimitMetadata
 } from "@/lib/meta-delivery-limit";
-import { syncConversationWorkflowSignals } from "@/lib/conversation-workflow";
+import { ensureHumanQueueForConversation, syncConversationWorkflowSignals } from "@/lib/conversation-workflow";
 import { invalidateTenantEgressCaches } from "@/lib/egress";
 
 const MAX_DATABASE_MEDIA_BYTES = 16 * 1024 * 1024;
-const V9_SOURCE_SHEETS = new Set(["ug leads", "online mba leads"]);
 
 type MetaMedia = {
   id?: string;
@@ -229,7 +234,7 @@ function metadataNumber(metadata: unknown, key: string) {
 function metadataSourceWritebackTarget(metadata: unknown) {
   const sourceSheet = metadataString(metadata, "sheetSourceSheet") || metadataString(metadata, "source_sheet");
   const sourceRow = metadataNumber(metadata, "sheetSourceRow") ?? metadataNumber(metadata, "source_row");
-  if (!sourceSheet || !sourceRow || !V9_SOURCE_SHEETS.has(sourceSheet.toLowerCase())) return null;
+  if (!sourceSheet || !sourceRow || !isSourceCampaignSheet(sourceSheet)) return null;
   return {
     range: googleSheetTabRange(sourceSheet),
     rowNumber: sourceRow
@@ -374,13 +379,28 @@ export async function POST(request: NextRequest) {
         source: direct.data.source ?? "ORGANIC",
         sourceId: direct.data.sourceId
       });
+      const campaignStop = result.duplicate
+        ? { stopped: 0 }
+        : await stopActiveSourceCampaignsForContact({
+            tenantId,
+            contactId: result.conversation.contactId,
+            conversationId: result.conversation.id,
+            lastInboundMessageAt: result.message.createdAt
+          });
       const workflowConversation = await syncConversationWorkflowSignals({
         tenantId,
         conversationId: result.conversation.id
       });
+      const campaignHandoffConversation = campaignStop.stopped
+        ? await ensureHumanQueueForConversation({
+            tenantId,
+            conversationId: result.conversation.id,
+            reason: "Customer replied to source campaign automation"
+          })
+        : null;
 
       const payload = {
-        conversation: serializeConversation(workflowConversation ?? result.conversation),
+        conversation: serializeConversation(campaignHandoffConversation ?? workflowConversation ?? result.conversation),
         message: serializeMessage(result.message),
         scoring: result.scoring
       };
@@ -389,9 +409,11 @@ export async function POST(request: NextRequest) {
         emitTenantEvent(tenantId, "message.created", payload);
         emitTenantEvent(tenantId, "conversation.updated", payload.conversation);
         emitTenantEvent(tenantId, "lead.temperature.updated", payload.scoring);
-        await handleAiAgentInboundReply({ tenantId, conversationId: result.conversation.id }).catch((error) => {
-          console.error("[webhook.ai-agent] failed", error instanceof Error ? error.message : String(error));
-        });
+        if (!campaignStop.stopped) {
+          await handleAiAgentInboundReply({ tenantId, conversationId: result.conversation.id }).catch((error) => {
+            console.error("[webhook.ai-agent] failed", error instanceof Error ? error.message : String(error));
+          });
+        }
       }
       return json({ ok: true, duplicate: result.duplicate });
     }
@@ -480,6 +502,12 @@ export async function POST(request: NextRequest) {
               status: sheetStatus
             });
           }
+          await updateSourceCampaignDeliveryStatusFromWebhook({
+            tenantId: message.tenantId,
+            metadata: updated.metadata,
+            deliveryStatus: mapped as CampaignDeliveryStatus,
+            failureReason
+          });
           invalidateTenantEgressCaches(message.tenantId);
           emitTenantEvent(message.tenantId, "message.status.updated", serializeMessage(updated));
         }
@@ -510,12 +538,27 @@ export async function POST(request: NextRequest) {
             source: message.referral ? "AD" : "ORGANIC",
             sourceId: message.referral?.source_id
           });
+          const campaignStop = result.duplicate
+            ? { stopped: 0 }
+            : await stopActiveSourceCampaignsForContact({
+                tenantId,
+                contactId: result.conversation.contactId,
+                conversationId: result.conversation.id,
+                lastInboundMessageAt: result.message.createdAt
+              });
           const workflowConversation = await syncConversationWorkflowSignals({
             tenantId,
             conversationId: result.conversation.id
           });
+          const campaignHandoffConversation = campaignStop.stopped
+            ? await ensureHumanQueueForConversation({
+                tenantId,
+                conversationId: result.conversation.id,
+                reason: "Customer replied to source campaign automation"
+              })
+            : null;
           const eventPayload = {
-            conversation: serializeConversation(workflowConversation ?? result.conversation),
+            conversation: serializeConversation(campaignHandoffConversation ?? workflowConversation ?? result.conversation),
             message: serializeMessage(result.message),
             scoring: result.scoring
           };
@@ -524,9 +567,11 @@ export async function POST(request: NextRequest) {
             emitTenantEvent(tenantId, "message.created", eventPayload);
             emitTenantEvent(tenantId, "conversation.updated", eventPayload.conversation);
             emitTenantEvent(tenantId, "lead.temperature.updated", eventPayload.scoring);
-            await handleAiAgentInboundReply({ tenantId, conversationId: result.conversation.id }).catch((error) => {
-              console.error("[webhook.ai-agent] failed", error instanceof Error ? error.message : String(error));
-            });
+            if (!campaignStop.stopped) {
+              await handleAiAgentInboundReply({ tenantId, conversationId: result.conversation.id }).catch((error) => {
+                console.error("[webhook.ai-agent] failed", error instanceof Error ? error.message : String(error));
+              });
+            }
           }
         }
       }
