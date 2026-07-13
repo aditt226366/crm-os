@@ -284,6 +284,34 @@ function graphErrorCode(data: unknown) {
   return undefined;
 }
 
+function graphErrorInfo(data: unknown): { code?: number; subcode?: number; message?: string } {
+  if (data && typeof data === "object" && "error" in data) {
+    const error = (data as { error?: { code?: number; error_subcode?: number; message?: string } }).error;
+    return { code: error?.code, subcode: error?.error_subcode, message: error?.message?.trim() || undefined };
+  }
+  return {};
+}
+
+// Distinguish "the id is wrong" from "the access token is invalid or cannot
+// access this object". Meta returns these for token/permission problems even
+// when the id itself is correct:
+//   190 / 102 / 104 / 463 / 467 -> token invalid or expired
+//   10 / 200-299                -> permission denied
+//   100 subcode 33              -> object exists but the token cannot read it
+function isTokenOrPermissionError({ code, subcode }: { code?: number; subcode?: number }) {
+  if (code === undefined) return false;
+  if ([190, 102, 104, 463, 467, 10].includes(code)) return true;
+  if (code >= 200 && code <= 299) return true;
+  if (code === 100 && subcode === 33) return true;
+  return false;
+}
+
+function metaHint(info: { code?: number; message?: string }) {
+  if (!info.message && info.code === undefined) return "";
+  const parts = [info.message, info.code === undefined ? null : `code ${info.code}`].filter(Boolean);
+  return ` (Meta: ${parts.join(" | ")})`;
+}
+
 async function verifyGoogleSheets(config: IntegrationConfig) {
   if (missingOrEmpty(config, "GOOGLE_SHEETS_ID") || !/^[a-zA-Z0-9-_]{8,}$/.test(config.GOOGLE_SHEETS_ID)) {
     return failure("GOOGLE_SHEETS_ID wrong");
@@ -422,9 +450,13 @@ async function verifyWhatsappCloud(config: IntegrationConfig, options: VerifyOpt
     return failure("WhatsApp verification timed out");
   }
   if (!phoneResponse.ok) {
-    return graphErrorCode(phoneResponse.data) === 190
-      ? failure("WHATSAPP_ACCESS_TOKEN wrong")
-      : failure("WHATSAPP_PHONE_NUMBER_ID wrong");
+    const info = graphErrorInfo(phoneResponse.data);
+    return isTokenOrPermissionError(info)
+      ? failure(
+          `WHATSAPP_ACCESS_TOKEN is invalid or lacks permission for this phone number. The phone number ID looks valid, but the token cannot read it — use a token from the same Meta app/business with whatsapp_business_management permission.${metaHint(info)}`,
+          "WHATSAPP_ACCESS_TOKEN"
+        )
+      : failure(`WHATSAPP_PHONE_NUMBER_ID wrong.${metaHint(info)}`, "WHATSAPP_PHONE_NUMBER_ID");
   }
 
   const wabaPhoneResponse = await fetchJson(
@@ -439,14 +471,21 @@ async function verifyWhatsappCloud(config: IntegrationConfig, options: VerifyOpt
     return failure("WhatsApp verification timed out");
   }
   if (!wabaPhoneResponse.ok) {
-    return graphErrorCode(wabaPhoneResponse.data) === 190
-      ? failure("WHATSAPP_ACCESS_TOKEN wrong")
-      : failure("WHATSAPP_BUSINESS_ACCOUNT_ID wrong");
+    const info = graphErrorInfo(wabaPhoneResponse.data);
+    return isTokenOrPermissionError(info)
+      ? failure(
+          `WHATSAPP_ACCESS_TOKEN is invalid or lacks permission for this WhatsApp Business Account.${metaHint(info)}`,
+          "WHATSAPP_ACCESS_TOKEN"
+        )
+      : failure(`WHATSAPP_BUSINESS_ACCOUNT_ID wrong.${metaHint(info)}`, "WHATSAPP_BUSINESS_ACCOUNT_ID");
   }
 
   const wabaPhones = ((wabaPhoneResponse.data as { data?: Array<{ id?: string }> } | null)?.data ?? []);
   if (!wabaPhones.some((phone) => phone.id === config.WHATSAPP_PHONE_NUMBER_ID)) {
-    return failure("WHATSAPP_PHONE_NUMBER_ID does not belong to this WhatsApp Business Account");
+    return failure(
+      "WHATSAPP_PHONE_NUMBER_ID does not belong to this WhatsApp Business Account. Check that the Phone number ID and WhatsApp Business Account ID are from the same WABA.",
+      "WHATSAPP_PHONE_NUMBER_ID"
+    );
   }
 
   const templateResponse = await fetchJson(
@@ -459,9 +498,10 @@ async function verifyWhatsappCloud(config: IntegrationConfig, options: VerifyOpt
     return failure("WhatsApp verification timed out");
   }
   if (!templateResponse.ok) {
-    return graphErrorCode(templateResponse.data) === 190
-      ? failure("WHATSAPP_ACCESS_TOKEN wrong")
-      : failure("WHATSAPP_BUSINESS_ACCOUNT_ID wrong");
+    const info = graphErrorInfo(templateResponse.data);
+    return isTokenOrPermissionError(info)
+      ? failure(`WHATSAPP_ACCESS_TOKEN is invalid or lacks permission to read templates.${metaHint(info)}`, "WHATSAPP_ACCESS_TOKEN")
+      : failure(`WHATSAPP_BUSINESS_ACCOUNT_ID wrong.${metaHint(info)}`, "WHATSAPP_BUSINESS_ACCOUNT_ID");
   }
 
   const phone = phoneResponse.data as { display_phone_number?: string; verified_name?: string; quality_rating?: string };
