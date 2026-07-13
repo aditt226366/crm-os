@@ -14,12 +14,21 @@ import { prisma } from "@/lib/prisma";
 import { emitTenantEvent } from "@/lib/realtime";
 import { ensureSourceCampaignSchema } from "@/lib/source-campaign-schema";
 import {
-  canonicalSourceSheetName,
-  sourceCampaignForSheet,
-  type SourceCampaignDefinition
-} from "@/lib/source-campaign-config";
+  canonicalSheetName,
+  loadSheetCampaignConfig,
+  sheetCampaignForSheet,
+  sheetCampaignKey,
+  type SheetCampaign,
+  type SheetCampaignConfig,
+  type SheetCampaignTemplate
+} from "@/lib/sheet-campaign-config";
 import { recordUsage } from "@/lib/usage";
-import { sendWhatsAppTextMessage } from "@/lib/whatsapp-cloud";
+import {
+  renderTemplateBody,
+  resolveWhatsAppTemplateVariables,
+  sendWhatsAppTemplateMessage,
+  type WhatsAppTemplateLead
+} from "@/lib/whatsapp-cloud";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SEND_GAP_MS = 6000;
@@ -78,9 +87,29 @@ function wait(ms: number) {
   });
 }
 
-function renderCampaignBody(body: string, name: string | null | undefined) {
-  const safeName = name?.trim() || "there";
-  return body.replace(/\{\{\s*name\s*\}\}/gi, safeName);
+function campaignLead(contact: { name: string | null; phone: string }): WhatsAppTemplateLead {
+  return { name: contact.name, phone: contact.phone };
+}
+
+/**
+ * Inbox preview for a template message. Uses the locally synced template body
+ * (rendered with the resolved variables) when available, otherwise a compact
+ * placeholder. The actual WhatsApp send always uses the approved template.
+ */
+async function resolveTemplatePreviewBody(
+  tenantId: string,
+  template: SheetCampaignTemplate,
+  lead: WhatsAppTemplateLead
+) {
+  const variables = resolveWhatsAppTemplateVariables({ variables: template.variables, lead });
+  const local = await prisma.whatsAppTemplate.findFirst({
+    where: { tenantId, name: template.name, language: template.language },
+    select: { body: true }
+  });
+  if (local?.body) {
+    return renderTemplateBody(local.body, variables);
+  }
+  return `Template: ${template.name}`;
 }
 
 function deliveryRecords(value: unknown): DeliveryRecord[] {
@@ -160,59 +189,69 @@ async function safeUsage(input: {
   }
 }
 
-async function ensureCampaignForTenant(tenantId: string, definition: SourceCampaignDefinition) {
+async function ensureCampaignForTenant(tenantId: string, sheetCampaign: SheetCampaign) {
   await ensureSourceCampaignSchema();
+  const key = sheetCampaignKey(sheetCampaign.sheetName);
   const campaign = await prisma.automationCampaign.upsert({
     where: {
       tenantId_key: {
         tenantId,
-        key: definition.key
+        key
       }
     },
     create: {
       tenantId,
-      key: definition.key,
-      name: definition.name,
-      sourceSheet: definition.sourceSheet,
+      key,
+      name: sheetCampaign.sheetName,
+      sourceSheet: sheetCampaign.sheetName,
       status: "ACTIVE",
       metadata: {
-        sourceSheet: definition.sourceSheet,
-        managedBy: "source-campaign-engine"
+        sourceSheet: sheetCampaign.sheetName,
+        managedBy: "sheet-campaign-engine"
       } as Prisma.InputJsonObject
     },
     update: {
-      name: definition.name,
-      sourceSheet: definition.sourceSheet,
+      name: sheetCampaign.sheetName,
+      sourceSheet: sheetCampaign.sheetName,
       status: "ACTIVE",
       metadata: {
-        sourceSheet: definition.sourceSheet,
-        managedBy: "source-campaign-engine"
+        sourceSheet: sheetCampaign.sheetName,
+        managedBy: "sheet-campaign-engine"
       } as Prisma.InputJsonObject
     }
   });
 
-  for (const step of definition.steps) {
+  // Steps are 1-indexed and mirror the configured template order. The step
+  // `body` holds the template name for display; the actual template descriptor
+  // (language/variables) is resolved from the tenant config at send time.
+  for (const [index, template] of sheetCampaign.templates.entries()) {
+    const stepNumber = index + 1;
     await prisma.automationCampaignStep.upsert({
       where: {
         campaignId_stepNumber: {
           campaignId: campaign.id,
-          stepNumber: step.stepNumber
+          stepNumber
         }
       },
       create: {
         campaignId: campaign.id,
-        stepNumber: step.stepNumber,
-        delayDays: step.delayDays,
-        body: step.body,
-        sendCondition: step.stepNumber === 1 ? "IMMEDIATE" : "NO_INBOUND_REPLY_SINCE_START"
+        stepNumber,
+        delayDays: template.delayDays,
+        body: template.name,
+        sendCondition: stepNumber === 1 ? "IMMEDIATE" : "NO_INBOUND_REPLY_SINCE_START"
       },
       update: {
-        delayDays: step.delayDays,
-        body: step.body,
-        sendCondition: step.stepNumber === 1 ? "IMMEDIATE" : "NO_INBOUND_REPLY_SINCE_START"
+        delayDays: template.delayDays,
+        body: template.name,
+        sendCondition: stepNumber === 1 ? "IMMEDIATE" : "NO_INBOUND_REPLY_SINCE_START"
       }
     });
   }
+
+  // Drop any steps beyond the configured template count (config was shortened).
+  await prisma.automationCampaignStep.deleteMany({
+    where: { campaignId: campaign.id, stepNumber: { gt: sheetCampaign.templates.length } }
+  });
 
   return prisma.automationCampaign.findUniqueOrThrow({
     where: { id: campaign.id },
@@ -225,19 +264,22 @@ export async function enrollImportedLeadInSourceCampaign({
   leadId,
   contactId,
   conversationId,
-  sourceSheet
+  sourceSheet,
+  sheetConfig
 }: {
   tenantId: string;
   leadId?: string | null;
   contactId: string;
   conversationId?: string | null;
   sourceSheet?: string | null;
+  sheetConfig?: SheetCampaignConfig | null;
 }) {
-  const definition = sourceCampaignForSheet(sourceSheet);
-  if (!definition) return null;
+  const config = sheetConfig ?? (await loadSheetCampaignConfig(tenantId));
+  const sheetCampaign = sheetCampaignForSheet(config, sourceSheet);
+  if (!sheetCampaign) return null;
 
-  const campaign = await ensureCampaignForTenant(tenantId, definition);
-  const canonicalSourceSheet = canonicalSourceSheetName(sourceSheet) ?? definition.sourceSheet;
+  const campaign = await ensureCampaignForTenant(tenantId, sheetCampaign);
+  const canonicalSourceSheet = canonicalSheetName(config, sourceSheet) ?? sheetCampaign.sheetName;
   const existing = await prisma.automationCampaignEnrollment.findUnique({
     where: {
       campaignId_contactId: {
@@ -344,12 +386,14 @@ async function sendEnrollmentStep({
   stepNumber,
   userId,
   whatsappConfig,
+  sheetConfig,
   endpoint
 }: {
   enrollment: DueEnrollment;
   stepNumber: number;
   userId: string;
   whatsappConfig: IntegrationConfig;
+  sheetConfig: SheetCampaignConfig | null;
   endpoint: string;
 }): Promise<SourceCampaignRunResult["results"][number]> {
   const step = enrollment.campaign.steps.find((item) => item.stepNumber === stepNumber);
@@ -361,6 +405,25 @@ async function sendEnrollmentStep({
       phone: enrollment.contact.phone,
       status: "failed",
       reason: "Campaign step is missing."
+    };
+  }
+
+  // Resolve the approved template for this sheet + step from the tenant config.
+  // Sending an approved template (not free text) is what lets a cold Google-Sheet
+  // lead be messaged at all, and passing the variable mapping fills {{1}} etc.
+  const sheetCampaign = sheetCampaignForSheet(sheetConfig, enrollment.sourceSheet);
+  const template: SheetCampaignTemplate | null = sheetCampaign?.templates[stepNumber - 1] ?? null;
+  if (!template) {
+    const reason =
+      "No approved template is configured for this sheet/step in Broadcast & Campaign Templates.";
+    await failEnrollment({ enrollment, reason });
+    return {
+      enrollmentId: enrollment.id,
+      campaignKey: enrollment.campaign.key,
+      phone: enrollment.contact.phone,
+      status: "failed",
+      stepNumber,
+      reason
     };
   }
 
@@ -453,11 +516,16 @@ async function sendEnrollmentStep({
     };
   }
 
-  const body = renderCampaignBody(step.body, enrollment.contact.name);
-  const sendResult = await sendWhatsAppTextMessage({
+  const lead = campaignLead(enrollment.contact);
+  const body = await resolveTemplatePreviewBody(enrollment.tenantId, template, lead);
+  const sendResult = await sendWhatsAppTemplateMessage({
     config: whatsappConfig,
     to: enrollment.contact.phone,
-    body
+    templateName: template.name,
+    language: template.language,
+    variableMode: template.variableMode,
+    variableMappings: template.variables,
+    lead
   });
   const metaLimit =
     !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
@@ -472,12 +540,16 @@ async function sendEnrollmentStep({
     campaignEnrollmentId: enrollment.id,
     stepNumber,
     scheduledFor: scheduledFor.toISOString(),
-    source_sheet: enrollment.sourceSheet
+    source_sheet: enrollment.sourceSheet,
+    templateName: template.name,
+    templateLanguage: template.language,
+    variableMode: template.variableMode,
+    variableMappings: template.variables
   };
   const outbound = await createOutboundConversationMessage({
     tenantId: enrollment.tenantId,
     conversationId: enrollment.conversationId ?? enrollment.conversation?.id ?? "",
-    type: "TEXT",
+    type: "TEMPLATE",
     body,
     whatsappMessageId: sendResult.whatsappMessageId,
     status: sendResult.ok ? "PENDING" : "FAILED",
@@ -592,6 +664,7 @@ export async function runDueSourceCampaignSteps({
   });
   const results: SourceCampaignRunResult["results"] = [];
   const whatsappConfig = await connectedWhatsAppConfig(tenantId);
+  const sheetConfig = await loadSheetCampaignConfig(tenantId);
   const sendGapMs = configuredSendGapMs();
   let attemptedSends = 0;
 
@@ -622,6 +695,7 @@ export async function runDueSourceCampaignSteps({
         stepNumber: enrollment.nextStepNumber ?? 1,
         userId,
         whatsappConfig,
+        sheetConfig,
         endpoint
       })
     );

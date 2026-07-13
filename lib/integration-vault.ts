@@ -10,6 +10,11 @@ import {
   type TemplateVariableConfig,
   type WhatsAppTemplateRole
 } from "@/lib/whatsapp-template-config";
+import {
+  allSheetCampaignTemplates,
+  parseSheetCampaignsConfig,
+  SHEET_CAMPAIGNS_CONFIG_FIELD
+} from "@/lib/sheet-campaign-config";
 
 export type IntegrationConfig = Record<string, string>;
 
@@ -612,7 +617,31 @@ async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: 
     return scrapFollowUp2Template;
   }
 
+  // Verify every template configured in the per-sheet drip campaigns is approved.
+  const sheetCampaignConfig = parseSheetCampaignsConfig(config[SHEET_CAMPAIGNS_CONFIG_FIELD]);
+  const sheetCampaignTemplates = allSheetCampaignTemplates(sheetCampaignConfig);
+  for (const template of sheetCampaignTemplates) {
+    const templates = await fetchMetaTemplatesByName({
+      whatsappConfig,
+      templateName: template.name,
+      field: SHEET_CAMPAIGNS_CONFIG_FIELD
+    });
+    if (!Array.isArray(templates)) {
+      return templates;
+    }
+    const match = templates.find((item) => item.name === template.name && item.language === template.language);
+    if (!match) {
+      return failure(`Sheet campaign template "${template.name}" (${template.language}) was not found in Meta`, SHEET_CAMPAIGNS_CONFIG_FIELD);
+    }
+    if (match.status !== "APPROVED") {
+      return failure(`Sheet campaign template "${template.name}" is not approved`, SHEET_CAMPAIGNS_CONFIG_FIELD);
+    }
+  }
+
   return success("Broadcast & Campaign Templates connected successfully", {
+    sheetCampaignSheetCount: sheetCampaignConfig?.sheets.length ?? 0,
+    sheetCampaignTemplateCount: sheetCampaignTemplates.length,
+    combinedSheet: sheetCampaignConfig?.combinedSheet ?? null,
     templateName: welcomeTemplate.name,
     templateLanguage: welcomeTemplate.language,
     templateStatus: welcomeTemplate.status,

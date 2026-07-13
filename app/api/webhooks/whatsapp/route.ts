@@ -14,7 +14,6 @@ import {
 } from "@/lib/google-sheets-leads";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
 import { downloadWhatsAppMedia, messageTypeFromMime } from "@/lib/whatsapp-cloud";
-import { isSourceCampaignSheet } from "@/lib/source-campaign-config";
 import {
   stopActiveSourceCampaignsForContact,
   updateSourceCampaignDeliveryStatusFromWebhook,
@@ -234,7 +233,10 @@ function metadataNumber(metadata: unknown, key: string) {
 function metadataSourceWritebackTarget(metadata: unknown) {
   const sourceSheet = metadataString(metadata, "sheetSourceSheet") || metadataString(metadata, "source_sheet");
   const sourceRow = metadataNumber(metadata, "sheetSourceRow") ?? metadataNumber(metadata, "source_row");
-  if (!sourceSheet || !sourceRow || !isSourceCampaignSheet(sourceSheet)) return null;
+  // Write status back to the originating source tab for any row that carries a
+  // source_sheet + source_row, but never to the combined crm_leads master (it is
+  // spill-formula output).
+  if (!sourceSheet || !sourceRow || isCrmLeadsRange(googleSheetTabRange(sourceSheet))) return null;
   return {
     range: googleSheetTabRange(sourceSheet),
     rowNumber: sourceRow

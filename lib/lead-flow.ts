@@ -22,6 +22,7 @@ import { recordUsage } from "@/lib/usage";
 import { emitTenantEvent } from "@/lib/realtime";
 import { type WhatsAppTemplateLead } from "@/lib/whatsapp-cloud";
 import { templateVariableConfig } from "@/lib/whatsapp-template-config";
+import { loadSheetCampaignConfig, type SheetCampaignConfig } from "@/lib/sheet-campaign-config";
 import {
   enrollImportedLeadInSourceCampaign,
   runDueSourceCampaignSteps,
@@ -801,6 +802,11 @@ export async function runGoogleSheetLeadFlow({
   assertConnected(integrations, "KNOWLEDGE_BASE", "Knowledge base is not connected for this company.");
   assertConnected(integrations, "AI_MODEL", "AI model is not connected for this company.");
 
+  // Per-sheet drip template config (loaded once). Leads whose source_sheet is
+  // configured here run the multi-template drip; other leads fall through to the
+  // single MAIN template send below.
+  const sheetCampaignConfig: SheetCampaignConfig | null = await loadSheetCampaignConfig(tenantId);
+
   const mainTemplateMessageConfig = await loadTenantTemplateMessageConfig({
     tenantId,
     templatePurpose: "MAIN"
@@ -895,7 +901,8 @@ export async function runGoogleSheetLeadFlow({
       leadId: leadRecord?.id,
       contactId: contact.id,
       conversationId: conversation.id,
-      sourceSheet: sheetLead.sourceSheet
+      sourceSheet: sheetLead.sourceSheet,
+      sheetConfig: sheetCampaignConfig
     });
     if (sourceCampaignEnrollment) {
       if (attemptedSends > 0 && sendGapMs > 0) {

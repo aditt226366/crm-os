@@ -23,6 +23,7 @@ import {
 import { INTEGRATION_TYPES, type IntegrationType } from "@/lib/constants";
 import { INTEGRATION_CATALOG, IntegrationFieldDefinition, isSensitiveField } from "@/lib/integration-catalog";
 import { IntegrationRecord } from "@/components/admin/IntegrationCard";
+import { SheetCampaignsBuilder } from "@/components/admin/SheetCampaignsBuilder";
 import { WhatsAppEmbeddedSignupButton } from "@/components/integrations/WhatsAppEmbeddedSignupButton";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSkeleton } from "@/components/shared/LoadingSkeleton";
@@ -804,6 +805,16 @@ function IntegrationField({
     field.visibleWhen && values[field.visibleWhen.field] !== field.visibleWhen.value;
 
   if (isHiddenByDependency) return null;
+
+  if (field.input === "sheet-campaigns") {
+    return (
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{field.label}</p>
+        <SheetCampaignsBuilder value={values[field.name] ?? ""} error={error} onChange={onChange} />
+        {field.helpText ? <p className="mt-2 block text-xs leading-5 text-slate-500">{field.helpText}</p> : null}
+      </div>
+    );
+  }
 
   const placeholder =
     protectedField && maskedValue

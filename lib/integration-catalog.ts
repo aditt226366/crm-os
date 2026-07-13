@@ -3,7 +3,7 @@ import { INTEGRATION_DEFINITIONS, type IntegrationType } from "@/lib/constants";
 export type IntegrationFieldDefinition = {
   name: string;
   label: string;
-  input: "text" | "url" | "password" | "password-textarea" | "textarea" | "select" | "file";
+  input: "text" | "url" | "password" | "password-textarea" | "textarea" | "select" | "file" | "sheet-campaigns";
   required?: boolean;
   secret?: boolean;
   sensitive?: boolean;
@@ -232,6 +232,14 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         group: "Appointment Follow-up (Global Skin Care)",
         placeholder: "{\"1\":\"lead.name\",\"2\":\"lead.appointment\"}",
         helpText: "JSON mapping from template variable key to a lead field. Use lead.appointment for the detected appointment date/time."
+      },
+      {
+        name: "SHEET_CAMPAIGNS_JSON",
+        label: "Sheet drip campaigns",
+        input: "sheet-campaigns",
+        group: "Sheet Drip Campaigns",
+        helpText:
+          "Map each source sheet (e.g. UG Leads, Online MBA Leads) to an ordered set of approved Meta templates. Leads are read from one combined sheet and routed to their sheet's template sequence."
       }
     ]
   },
