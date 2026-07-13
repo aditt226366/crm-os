@@ -4,7 +4,6 @@ import { resolveContactForPhone } from "@/lib/contact-identity";
 import { recalculateConversationLeadTemperature } from "@/lib/lead-temperature";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { normalizePhoneE164 } from "@/lib/phone/normalizePhone";
-import { SCRAP_DORMANT_TAG, withoutScrapDormantTag } from "@/lib/scrap-follow-up-state";
 
 type ConversationMessageType = "TEXT" | "TEMPLATE" | "IMAGE" | "DOCUMENT" | "AUDIO" | "VIDEO" | "SYSTEM" | "NOTE";
 
@@ -250,20 +249,13 @@ export async function upsertInboundConversationMessage({
     name,
     source
   });
-  let contact = await prisma.contact.update({
+  const contact = await prisma.contact.update({
     where: { id: resolvedContact.contact.id },
     data: {
       lastMessageAt: now,
       optOut: isOptOutRequest ? true : undefined
     }
   });
-
-  if (!isOptOutRequest && contact.tags.includes(SCRAP_DORMANT_TAG)) {
-    contact = await prisma.contact.update({
-      where: { id: contact.id },
-      data: { tags: withoutScrapDormantTag(contact.tags) }
-    });
-  }
 
   const conversationSource = contact.source === "GOOGLE_SHEET" ? "GOOGLE_SHEET" : source;
   const conversation =

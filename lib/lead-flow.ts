@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api";
 import { safeCreateAuditLog } from "@/lib/audit";
 import { resolveContactForPhone } from "@/lib/contact-identity";
-import { INTEGRATION_DEFINITIONS, type FeatureKey } from "@/lib/constants";
+import { INTEGRATION_DEFINITIONS } from "@/lib/constants";
 import {
   CRM_LEADS_RANGE,
   DEFAULT_LEAD_SHEET_RANGE,
@@ -18,21 +18,14 @@ import { createOutboundConversationMessage, serializeConversation, serializeMess
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
-import { recordUsage } from "@/lib/usage";
 import { emitTenantEvent } from "@/lib/realtime";
-import { type WhatsAppTemplateLead } from "@/lib/whatsapp-cloud";
-import { templateVariableConfig } from "@/lib/whatsapp-template-config";
 import { loadSheetCampaignConfig, type SheetCampaignConfig } from "@/lib/sheet-campaign-config";
 import {
   enrollImportedLeadInSourceCampaign,
   runDueSourceCampaignSteps,
   type SourceCampaignRunResult
 } from "@/lib/source-campaigns";
-import {
-  loadTenantTemplateMessageConfig,
-  sendTemplateMessage,
-  TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE
-} from "@/lib/tenant-template-messaging";
+import { TEMPLATE_SETTINGS_NOT_CONFIGURED_MESSAGE } from "@/lib/tenant-template-messaging";
 import {
   activeMetaDeliveryLimit,
   activeMetaDeliveryLimitFromMessage,
@@ -53,24 +46,6 @@ type FlowIntegration = {
   encryptedConfig: unknown;
   lastVerificationError: string | null;
 };
-
-type LeadTemplate = {
-  id: string | null;
-  name: string;
-  language: string;
-  status: string;
-  body: string;
-  components?: unknown;
-};
-
-function leadTemplateInput(lead: SheetLead): WhatsAppTemplateLead {
-  return {
-    name: lead.name,
-    phone: lead.phone,
-    status: lead.status,
-    row: lead.row
-  };
-}
 
 function configuredLeadSendGapMs() {
   const value = Number(process.env.LEAD_SHEET_SEND_GAP_MS);
@@ -98,38 +73,6 @@ function assertConnected(
     throw new ApiError(409, "INTEGRATION_NOT_CONNECTED", integration?.lastVerificationError || message);
   }
   return readEncryptedConfig(integration.encryptedConfig);
-}
-
-function configuredTemplate(config: IntegrationConfig): LeadTemplate | null {
-  const templateConfig = templateVariableConfig(config, "MAIN");
-  if (!templateConfig) return null;
-
-  return {
-    id: null,
-    name: templateConfig.name,
-    language: templateConfig.language,
-    status: "APPROVED",
-    body: `Approved WhatsApp template: ${templateConfig.name}`,
-    components: null
-  };
-}
-
-async function safeRecordUsage(input: {
-  tenantId: string;
-  feature: FeatureKey;
-  provider: string;
-  eventType: string;
-  endpoint?: string;
-  units: number;
-  cost: number;
-  status: string;
-  metadata?: unknown;
-}) {
-  try {
-    await recordUsage(input);
-  } catch (error) {
-    console.error("[lead-flow.usage] failed", error instanceof Error ? error.message : String(error));
-  }
 }
 
 function normalizedSheetStatus(status: string | null) {
@@ -394,52 +337,6 @@ async function currentFlowIntegrations(tenantId: string) {
   });
 }
 
-async function syncConfiguredApprovedTemplate(tenantId: string) {
-  await ensureLeadWorkspaceSchema();
-  const integration = await prisma.integration.findUnique({
-    where: {
-      tenantId_type: {
-        tenantId,
-        type: "WHATSAPP_TEMPLATE_SETTINGS"
-      }
-    },
-    select: { status: true, encryptedConfig: true }
-  });
-
-  if (integration?.status !== "CONNECTED") {
-    return null;
-  }
-
-  const configured = configuredTemplate(readEncryptedConfig(integration.encryptedConfig));
-  if (!configured) {
-    return null;
-  }
-
-  return prisma.whatsAppTemplate.upsert({
-    where: {
-      tenantId_name_language: {
-        tenantId,
-        name: configured.name,
-        language: configured.language
-      }
-    },
-    create: {
-      tenantId,
-      name: configured.name,
-      language: configured.language,
-      category: "MARKETING",
-      status: "APPROVED",
-      body: configured.body,
-      components: {
-        source: "integration-settings"
-      } as Prisma.InputJsonValue
-    },
-    update: {
-      status: "APPROVED"
-    }
-  });
-}
-
 type LeadFlowSummaryOptions = {
   limit?: number;
   cursor?: string | null;
@@ -450,7 +347,6 @@ type LeadFlowSummaryOptions = {
 };
 
 export async function leadFlowSummary(tenantId: string, options: LeadFlowSummaryOptions = {}) {
-  await syncConfiguredApprovedTemplate(tenantId);
   const integrations = await currentFlowIntegrations(tenantId);
   const limit = Math.min(Math.max(1, Math.floor(options.limit ?? 50)), 100);
   const search = options.search?.trim().slice(0, 80);
@@ -744,34 +640,6 @@ async function markCrmLeadContacted(leadId: string) {
   });
 }
 
-async function alreadySentTemplate({
-  tenantId,
-  conversationId,
-  templateId
-}: {
-  tenantId: string;
-  conversationId: string;
-  templateId: string | null;
-}) {
-  // When we have a concrete template id, dedupe on it. When we don't (no local
-  // WhatsAppTemplate row resolved yet), fall back to "any MAIN template already
-  // sent on this conversation" so a lead is never messaged twice across sheet
-  // sync runs — the CRM DB, not the sheet status, is the real dedupe source.
-  const existing = await prisma.message.findFirst({
-    where: {
-      tenantId,
-      conversationId,
-      direction: "OUTBOUND",
-      type: "TEMPLATE",
-      status: { in: ["PENDING", "SENT", "DELIVERED", "READ"] },
-      ...(templateId ? { templateId } : {})
-    },
-    select: { id: true }
-  });
-
-  return Boolean(existing);
-}
-
 export async function runGoogleSheetLeadFlow({
   tenantId,
   userId,
@@ -782,7 +650,6 @@ export async function runGoogleSheetLeadFlow({
   range?: string;
   maxRows?: number;
 }) {
-  await syncConfiguredApprovedTemplate(tenantId);
   const integrations = integrationMap(await currentFlowIntegrations(tenantId));
   const sheetsConfig = assertConnected(
     integrations,
@@ -802,16 +669,10 @@ export async function runGoogleSheetLeadFlow({
   assertConnected(integrations, "KNOWLEDGE_BASE", "Knowledge base is not connected for this company.");
   assertConnected(integrations, "AI_MODEL", "AI model is not connected for this company.");
 
-  // Per-sheet drip template config (loaded once). Leads whose source_sheet is
-  // configured here run the multi-template drip; other leads fall through to the
-  // single MAIN template send below.
+  // Per-sheet drip template config (loaded once). Each lead is routed by its
+  // source_sheet to that sheet's drip campaign (step 1 = welcome template).
   const sheetCampaignConfig: SheetCampaignConfig | null = await loadSheetCampaignConfig(tenantId);
 
-  const mainTemplateMessageConfig = await loadTenantTemplateMessageConfig({
-    tenantId,
-    templatePurpose: "MAIN"
-  });
-  const template = mainTemplateMessageConfig.template;
   const sheetSource = await readSheetLeadsForFlow({
     config: sheetsConfig,
     maxRows: Math.min(Math.max(maxRows ?? 200, 1), 200)
@@ -837,14 +698,6 @@ export async function runGoogleSheetLeadFlow({
       });
       continue;
     }
-
-    // When reading from the crm_leads master, a lead may be missing
-    // source_sheet/source_row (e.g. the formula columns are misconfigured). We
-    // still process the lead — the CRM DB is the source of truth for lead and
-    // campaign status — and simply skip the sheet write-back with a specific,
-    // actionable reason. We never fall back to writing status into crm_leads,
-    // which is spill-formula output and would throw a spill/overwrite error.
-    const writebackTarget = sourceWritebackTarget(sheetLead);
 
     const { contact, conversation } = await upsertLeadConversation({ tenantId, lead: sheetLead });
     const leadRecord = await prisma.lead.findFirst({
@@ -969,162 +822,21 @@ export async function runGoogleSheetLeadFlow({
       continue;
     }
 
-    if (await alreadySentTemplate({ tenantId, conversationId: conversation.id, templateId: template.id })) {
-      if (leadRecord) {
-        await markCrmLeadContacted(leadRecord.id);
-      }
-      const sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead, statusColumnCache });
-      results.push({
-        phone: contact.phone,
-        status: "skipped",
-        reason: sheetUpdate.ok ? "Template already sent" : `Template already sent, but sheet update failed: ${sheetUpdate.error}`,
-        sourceSheet: sheetLead.sourceSheet,
-        rowNumber: sheetLead.rowNumber,
-        sheetStatus: sheetLead.status ?? null
-      });
-      continue;
-    }
-
-    const leadInput = leadTemplateInput(sheetLead);
-    if (attemptedSends > 0 && sendGapMs > 0) {
-      await wait(sendGapMs);
-    }
-    attemptedSends += 1;
-    const templateMessage = await sendTemplateMessage({
-      tenantId,
-      templatePurpose: "MAIN",
-      to: contact.phone,
-      lead: leadInput,
-      config: mainTemplateMessageConfig
-    });
-    const { sendResult, templateConfig, variables } = templateMessage;
-    const immediateDeliveryLimit =
-      !sendResult.ok && isMetaDeliveryLimitError(sendResult.error)
-        ? createMetaDeliveryLimit({ reason: sendResult.error })
-        : null;
-    const preview = templateMessage.body;
-    const messageMetadata = {
-      sentByUserId: userId,
-      adapter: "lead-google-sheets-flow",
-      templateName: template.name,
-      templateLanguage: template.language,
-      sheetRowNumber: sheetLead.rowNumber,
-      sheetSourceRow: sheetLead.sourceRow,
-      sheetStatusColumnIndex: writebackTarget ? null : sheetLead.statusColumnIndex,
-      sheetRange,
-      sheetSourceSheet: sheetLead.sourceSheet,
-      sheetStatusRange: writebackTarget?.range ?? (isCrmLeadsRange(sheetRange) ? null : sheetRange),
-      sheetStatusRowNumber: writebackTarget?.rowNumber ?? (isCrmLeadsRange(sheetRange) ? null : sheetLead.rowNumber),
-      source_sheet: sheetLead.sourceSheet,
-      source_row: sheetLead.sourceRow,
-      leadSendGapMs: sendGapMs,
-      variableMode: templateConfig.variableMode,
-      variableMappings: templateConfig.variables,
-      variables
-    };
-    const outbound = await createOutboundConversationMessage({
-      tenantId,
-      conversationId: conversation.id,
-      type: "TEMPLATE",
-      templateId: template.id ?? undefined,
-      body: preview,
-      whatsappMessageId: sendResult.whatsappMessageId,
-      status: sendResult.ok ? "PENDING" : "FAILED",
-      failureReason: sendResult.error ?? null,
-      metadata: (immediateDeliveryLimit
-        ? withMetaDeliveryLimitMetadata(messageMetadata, immediateDeliveryLimit)
-        : messageMetadata) as Prisma.InputJsonObject
-    });
-
-    if (immediateDeliveryLimit) {
-      await prisma.contact.update({
-        where: { id: contact.id },
-        data: {
-          customFields: withContactMetaDeliveryLimit(
-            contact.customFields,
-            immediateDeliveryLimit,
-            outbound.message.id
-          ) as Prisma.InputJsonValue
-        }
-      });
-      const failureReason = metaDeliveryLimitReason(immediateDeliveryLimit);
-      await safeMarkSheetLeadStatus({
-        config: sheetsConfig,
-        range: sheetRange,
-        lead: sheetLead,
-        status: META_DELIVERY_LIMIT_DISPLAY,
-        statusColumnCache
-      });
-    } else if (!sendResult.ok) {
-      await safeMarkSheetLeadStatus({
-        config: sheetsConfig,
-        range: sheetRange,
-        lead: sheetLead,
-        status: "failure",
-        statusColumnCache
-      });
-    }
-
-    await safeRecordUsage({
-      tenantId,
-      feature: "LEAD_MANAGEMENT",
-      provider: "meta",
-      eventType: sendResult.ok
-        ? "lead_template.queued"
-        : immediateDeliveryLimit
-          ? "lead_template.meta_delivery_limited"
-          : "lead_template.failed",
-      endpoint: "/api/app/leads",
-      units: 1,
-      cost: sendResult.ok ? 0.006 : 0,
-      status: sendResult.ok ? "SUCCESS" : "FAILED",
-      metadata: {
-        messageId: outbound.message.id,
-        templateName: template.name,
-        sheetRange,
-        sheetRowNumber: sheetLead.rowNumber,
-        sheetSourceRow: sheetLead.sourceRow,
-        source_sheet: sheetLead.sourceSheet,
-        source_row: sheetLead.sourceRow
-      }
-    });
-
-    const payload = {
-      conversation: serializeConversation(outbound.conversation),
-      message: serializeMessage(outbound.message)
-    };
-    emitTenantEvent(tenantId, "message.created", payload);
-    emitTenantEvent(tenantId, "conversation.updated", payload.conversation);
-
+    // Every lead is messaged through its sheet's drip campaign (step 1 = welcome
+    // template, step 2 = follow-up day 1, step 3 = follow-up day 2, ...). A lead
+    // whose source_sheet has no configured drip is left untouched so it is picked
+    // up automatically once the operator adds that sheet under Sheet Drip
+    // Campaigns. We record a clear, actionable reason and do not mark the sheet.
     results.push({
       phone: contact.phone,
-      status: sendResult.ok ? "sent" : immediateDeliveryLimit ? "META_DELIVERY_LIMITED" : "failed",
-      reason: immediateDeliveryLimit ? metaDeliveryLimitReason(immediateDeliveryLimit) : (sendResult.error ?? null),
-      retryAfter: immediateDeliveryLimit?.retryAfter,
-      conversationId: conversation.id,
-      messageId: outbound.message.id,
-      whatsappMessageId: sendResult.whatsappMessageId ?? null,
-      sourceSheet: sheetLead.sourceSheet
-    });
-
-    let sheetUpdate: Awaited<ReturnType<typeof safeMarkSheetLeadMessaged>> | null = null;
-    if (sendResult.ok) {
-      if (leadRecord) {
-        await markCrmLeadContacted(leadRecord.id);
-      }
-      sheetUpdate = await safeMarkSheetLeadMessaged({ config: sheetsConfig, range: sheetRange, lead: sheetLead, statusColumnCache });
-    }
-
-    results[results.length - 1] = {
-      ...results[results.length - 1],
-      rowNumber: sheetLead.rowNumber,
-      sheetStatus: sheetLead.status ?? null,
+      status: "skipped",
+      reason: sheetLead.sourceSheet
+        ? `No drip campaign configured for sheet "${sheetLead.sourceSheet}". Add it under Broadcast & Campaign Templates → Sheet Drip Campaigns.`
+        : "Lead row has no source_sheet; cannot route to a drip campaign. Check the crm_leads formula columns.",
       sourceSheet: sheetLead.sourceSheet,
-      sheetUpdated: sheetUpdate ? sheetUpdate.ok : false,
-      reason:
-        (immediateDeliveryLimit ? metaDeliveryLimitReason(immediateDeliveryLimit) : sendResult.error) ??
-        (sheetUpdate && !sheetUpdate.ok ? `WhatsApp sent, but sheet update failed: ${sheetUpdate.error}` : null)
-    };
+      rowNumber: sheetLead.rowNumber,
+      sheetStatus: sheetLead.status ?? null
+    });
   }
 
   await safeCreateAuditLog({

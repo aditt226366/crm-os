@@ -4,7 +4,6 @@ import type { IntegrationType } from "@/lib/constants";
 import { CRM_LEADS_RANGE } from "@/lib/google-sheets-leads";
 import { runGoogleSheetLeadFlow } from "@/lib/lead-flow";
 import { prisma } from "@/lib/prisma";
-import { runDueScrapFollowUps, type ScrapFollowUpRunResult } from "@/lib/scrap-follow-up";
 import { runDueSourceCampaignSteps, type SourceCampaignRunResult } from "@/lib/source-campaigns";
 import { isGlobalSkincareTenant } from "@/lib/global-skincare-config";
 import { runGlobalSkincareAppointmentFollowUps } from "@/lib/global-skincare-appointments";
@@ -27,10 +26,6 @@ const LEAD_SYNC_LEASE_MS = 120_000;
 
 type LeadFlowInput = Parameters<typeof runGoogleSheetLeadFlow>[0];
 type LeadFlowResult = Awaited<ReturnType<typeof runGoogleSheetLeadFlow>>;
-type ScrapFollowUpResult = Pick<
-  ScrapFollowUpRunResult,
-  "scanned" | "sent" | "failed" | "skipped" | "dormant" | "templateMissing"
->;
 type SourceCampaignResult = Pick<SourceCampaignRunResult, "scanned" | "sent" | "failed" | "skipped" | "stopped" | "completed">;
 
 type TenantCandidate = {
@@ -63,7 +58,6 @@ export type LeadSheetAutoSyncTenantRun = {
   skipped?: number;
   deliveryLimited?: number;
   sourceCampaigns?: SourceCampaignResult;
-  scrapFollowUps?: ScrapFollowUpResult;
   reason?: string;
   missingIntegrations?: IntegrationType[];
   appointmentFollowUps?: {
@@ -93,12 +87,6 @@ export type LeadSheetAutoSyncSummary = {
     sourceCampaignsSkipped: number;
     sourceCampaignsStopped: number;
     sourceCampaignsCompleted: number;
-    scrapFollowUpsScanned: number;
-    scrapFollowUpsSent: number;
-    scrapFollowUpsFailed: number;
-    scrapFollowUpsSkipped: number;
-    scrapDormant: number;
-    scrapFollowUpTemplateMissing: number;
   };
   runs: LeadSheetAutoSyncTenantRun[];
 };
@@ -306,13 +294,7 @@ export async function runDueGoogleSheetLeadFlows({
         sourceCampaignsFailed: 0,
         sourceCampaignsSkipped: 0,
         sourceCampaignsStopped: 0,
-        sourceCampaignsCompleted: 0,
-        scrapFollowUpsScanned: 0,
-        scrapFollowUpsSent: 0,
-        scrapFollowUpsFailed: 0,
-        scrapFollowUpsSkipped: 0,
-        scrapDormant: 0,
-        scrapFollowUpTemplateMissing: 0
+        sourceCampaignsCompleted: 0
       },
       runs: [
         {
@@ -454,16 +436,10 @@ export async function runDueGoogleSheetLeadFlows({
           tenantId: candidate.id,
           userId: actor.id
         });
-        const scrapFollowUps = await runDueScrapFollowUps({
-          tenantId: candidate.id,
-          userId: actor.id
-        });
         const anySent =
           result.sent > 0 ||
           sourceCampaigns.sent > 0 ||
-          sourceCampaigns.completed > 0 ||
-          scrapFollowUps.sent > 0 ||
-          scrapFollowUps.dormant > 0;
+          sourceCampaigns.completed > 0;
         runs.push({
           tenantId: candidate.id,
           tenantName: candidate.name,
@@ -482,15 +458,7 @@ export async function runDueGoogleSheetLeadFlows({
             stopped: sourceCampaigns.stopped,
             completed: sourceCampaigns.completed
           },
-          scrapFollowUps: {
-            scanned: scrapFollowUps.scanned,
-            sent: scrapFollowUps.sent,
-            failed: scrapFollowUps.failed,
-            skipped: scrapFollowUps.skipped,
-            dormant: scrapFollowUps.dormant,
-            templateMissing: scrapFollowUps.templateMissing
-          },
-          reason: anySent ? undefined : "No new Sheet rows or Scrap follow-ups needed messaging."
+          reason: anySent ? undefined : "No new Sheet rows needed messaging."
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Lead sheet sync failed.";
@@ -526,13 +494,7 @@ export async function runDueGoogleSheetLeadFlows({
         sourceCampaignsFailed: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.failed ?? 0), 0),
         sourceCampaignsSkipped: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.skipped ?? 0), 0),
         sourceCampaignsStopped: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.stopped ?? 0), 0),
-        sourceCampaignsCompleted: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.completed ?? 0), 0),
-        scrapFollowUpsScanned: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.scanned ?? 0), 0),
-        scrapFollowUpsSent: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.sent ?? 0), 0),
-        scrapFollowUpsFailed: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.failed ?? 0), 0),
-        scrapFollowUpsSkipped: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.skipped ?? 0), 0),
-        scrapDormant: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.dormant ?? 0), 0),
-        scrapFollowUpTemplateMissing: runs.reduce((sum, run) => sum + (run.scrapFollowUps?.templateMissing ?? 0), 0)
+        sourceCampaignsCompleted: runs.reduce((sum, run) => sum + (run.sourceCampaigns?.completed ?? 0), 0)
       },
       runs
     };

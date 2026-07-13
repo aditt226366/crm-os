@@ -4,13 +4,6 @@ import { INTEGRATION_CATALOG, integrationFields, isSecretField, isSensitiveField
 import { decryptJson, encryptJson, maskSecret } from "@/lib/security";
 import { IntegrationError } from "@/lib/integrations/types";
 import {
-  parseTemplateVariables,
-  templateConfigDefinition,
-  templateVariableConfig,
-  type TemplateVariableConfig,
-  type WhatsAppTemplateRole
-} from "@/lib/whatsapp-template-config";
-import {
   allSheetCampaignTemplates,
   parseSheetCampaignsConfig,
   SHEET_CAMPAIGNS_CONFIG_FIELD
@@ -251,21 +244,6 @@ function failure(message: string, field?: string): VerificationResult {
 
 function success(message: string, metadata?: Record<string, unknown>): VerificationResult {
   return { status: "CONNECTED", message, metadata };
-}
-
-function missingRequiredTemplateConfig(config: IntegrationConfig, role: WhatsAppTemplateRole) {
-  const definition = templateConfigDefinition(role);
-  const name = definition.nameFields.some((field) => !missingOrEmpty(config, field));
-  const language = definition.languageFields.some((field) => !missingOrEmpty(config, field));
-  if (!name) return `${definition.nameFields[0]} wrong`;
-  if (!language) return `${definition.languageFields[0]} wrong`;
-  if (missingOrEmpty(config, definition.variableModeField)) return `${definition.variableModeField} wrong`;
-  if (missingOrEmpty(config, definition.variablesField)) return `${definition.variablesField} wrong`;
-
-  const parsedVariables = parseTemplateVariables(config[definition.variablesField]);
-  if (!parsedVariables.ok) return `${definition.variablesField} wrong`;
-  if (!templateVariableConfig(config, role)) return `${definition.variableModeField} wrong`;
-  return null;
 }
 
 async function fetchJson(
@@ -540,85 +518,23 @@ async function fetchMetaTemplatesByName({
   return ((response.data as { data?: MetaTemplateSummary[] })?.data ?? []);
 }
 
-async function verifyApprovedMetaTemplate({
-  whatsappConfig,
-  templateConfig
-}: {
-  whatsappConfig: IntegrationConfig;
-  templateConfig: TemplateVariableConfig;
-}): Promise<MetaTemplateSummary | VerificationResult> {
-  const templates = await fetchMetaTemplatesByName({
-    whatsappConfig,
-    templateName: templateConfig.name,
-    field: templateConfig.fields.name
-  });
-  if (!Array.isArray(templates)) {
-    return templates;
-  }
-
-  const nameMatch = templates.filter((template) => template.name === templateConfig.name);
-  if (!nameMatch.length) {
-    return failure(`${templateConfig.fields.name} wrong`, templateConfig.fields.name);
-  }
-  const languageMatch = nameMatch.find((template) => template.language === templateConfig.language);
-  if (!languageMatch) {
-    return failure(`${templateConfig.fields.language} wrong`, templateConfig.fields.language);
-  }
-  if (languageMatch.status !== "APPROVED") {
-    return failure(`${templateConfig.fields.name} is not approved`, templateConfig.fields.name);
-  }
-  return languageMatch;
-}
-
-function isVerificationResult(value: MetaTemplateSummary | VerificationResult): value is VerificationResult {
-  return "message" in value && "status" in value;
-}
-
-function templateMetadata(template: MetaTemplateSummary) {
-  return {
-    name: template.name,
-    language: template.language,
-    status: template.status,
-    category: template.category ?? null,
-    componentCount: Array.isArray(template.components) ? template.components.length : 0
-  };
-}
-
 async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: Partial<Record<IntegrationType, IntegrationConfig>>) {
   const whatsappConfig = dependencies?.WHATSAPP_CLOUD;
   if (!whatsappConfig?.WHATSAPP_ACCESS_TOKEN || !whatsappConfig.WHATSAPP_BUSINESS_ACCOUNT_ID) {
     return failure("WhatsApp Cloud API is not connected.");
   }
 
-  const missingConfig =
-    missingRequiredTemplateConfig(config, "MAIN") ??
-    missingRequiredTemplateConfig(config, "SCRAP_FOLLOWUP_1") ??
-    missingRequiredTemplateConfig(config, "SCRAP_FOLLOWUP_2");
-  if (missingConfig) {
-    return failure(missingConfig);
-  }
-
-  const mainTemplateConfig = templateVariableConfig(config, "MAIN")!;
-  const scrapFollowUp1Config = templateVariableConfig(config, "SCRAP_FOLLOWUP_1")!;
-  const scrapFollowUp2Config = templateVariableConfig(config, "SCRAP_FOLLOWUP_2")!;
-
-  const welcomeTemplate = await verifyApprovedMetaTemplate({ whatsappConfig, templateConfig: mainTemplateConfig });
-  if (isVerificationResult(welcomeTemplate)) {
-    return welcomeTemplate;
-  }
-
-  const scrapFollowUp1Template = await verifyApprovedMetaTemplate({ whatsappConfig, templateConfig: scrapFollowUp1Config });
-  if (isVerificationResult(scrapFollowUp1Template)) {
-    return scrapFollowUp1Template;
-  }
-
-  const scrapFollowUp2Template = await verifyApprovedMetaTemplate({ whatsappConfig, templateConfig: scrapFollowUp2Config });
-  if (isVerificationResult(scrapFollowUp2Template)) {
-    return scrapFollowUp2Template;
-  }
-
-  // Verify every template configured in the per-sheet drip campaigns is approved.
+  // The welcome + follow-up sequence is now configured per sheet under Sheet Drip
+  // Campaigns (step 1 = welcome, step 2 = follow-up day 1, step 3 = follow-up
+  // day 2, ...). At least one sheet with one approved template is required.
   const sheetCampaignConfig = parseSheetCampaignsConfig(config[SHEET_CAMPAIGNS_CONFIG_FIELD]);
+  if (!sheetCampaignConfig || !sheetCampaignConfig.sheets.length) {
+    return failure(
+      "Add at least one sheet with an approved template under Sheet Drip Campaigns.",
+      SHEET_CAMPAIGNS_CONFIG_FIELD
+    );
+  }
+
   const sheetCampaignTemplates = allSheetCampaignTemplates(sheetCampaignConfig);
   for (const template of sheetCampaignTemplates) {
     const templates = await fetchMetaTemplatesByName({
@@ -639,29 +555,10 @@ async function verifyTemplateSettings(config: IntegrationConfig, dependencies?: 
   }
 
   return success("Broadcast & Campaign Templates connected successfully", {
-    sheetCampaignSheetCount: sheetCampaignConfig?.sheets.length ?? 0,
+    sheetCampaignSheetCount: sheetCampaignConfig.sheets.length,
     sheetCampaignTemplateCount: sheetCampaignTemplates.length,
-    combinedSheet: sheetCampaignConfig?.combinedSheet ?? null,
-    templateName: welcomeTemplate.name,
-    templateLanguage: welcomeTemplate.language,
-    templateStatus: welcomeTemplate.status,
-    category: welcomeTemplate.category ?? null,
-    componentCount: Array.isArray(welcomeTemplate.components) ? welcomeTemplate.components.length : 0,
-    scrapFollowUp1TemplateName: scrapFollowUp1Template.name,
-    scrapFollowUp2TemplateName: scrapFollowUp2Template.name,
-    templates: {
-      welcome: { ...templateMetadata(welcomeTemplate), variableMode: mainTemplateConfig.variableMode, variables: mainTemplateConfig.variables },
-      scrapFollowUp1: {
-        ...templateMetadata(scrapFollowUp1Template),
-        variableMode: scrapFollowUp1Config.variableMode,
-        variables: scrapFollowUp1Config.variables
-      },
-      scrapFollowUp2: {
-        ...templateMetadata(scrapFollowUp2Template),
-        variableMode: scrapFollowUp2Config.variableMode,
-        variables: scrapFollowUp2Config.variables
-      }
-    }
+    combinedSheet: sheetCampaignConfig.combinedSheet,
+    sheets: sheetCampaignConfig.sheets.map((sheet) => ({ sheetName: sheet.sheetName, templateCount: sheet.templates.length }))
   });
 }
 

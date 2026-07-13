@@ -1,5 +1,8 @@
 export type WhatsAppTemplateVariableMode = "NUMBERED" | "NAMED";
-export type WhatsAppTemplateRole = "MAIN" | "SCRAP_FOLLOWUP_1" | "SCRAP_FOLLOWUP_2" | "APPOINTMENT_FOLLOWUP";
+// Welcome + scrap follow-up templates are now configured per sheet as drip steps
+// (see lib/sheet-campaign-config.ts). The only remaining fixed role is the
+// company-specific appointment follow-up (Global Skin Care).
+export type WhatsAppTemplateRole = "APPOINTMENT_FOLLOWUP";
 
 export type TemplateVariableConfig = {
   role: WhatsAppTemplateRole;
@@ -16,24 +19,6 @@ export type TemplateVariableConfig = {
 };
 
 const TEMPLATE_CONFIG = {
-  MAIN: {
-    nameFields: ["MAIN_TEMPLATE_NAME", "WHATSAPP_TEMPLATE_NAME"],
-    languageFields: ["MAIN_TEMPLATE_LANGUAGE", "WHATSAPP_TEMPLATE_LANGUAGE"],
-    variableModeField: "MAIN_TEMPLATE_VARIABLE_MODE",
-    variablesField: "MAIN_TEMPLATE_VARIABLES"
-  },
-  SCRAP_FOLLOWUP_1: {
-    nameFields: ["SCRAP_FOLLOWUP_1_TEMPLATE_NAME", "SCRAP_FOLLOW_UP_1_TEMPLATE_NAME"],
-    languageFields: ["SCRAP_FOLLOWUP_1_TEMPLATE_LANGUAGE", "SCRAP_FOLLOW_UP_1_TEMPLATE_LANGUAGE", "WHATSAPP_TEMPLATE_LANGUAGE"],
-    variableModeField: "SCRAP_FOLLOWUP_1_VARIABLE_MODE",
-    variablesField: "SCRAP_FOLLOWUP_1_VARIABLES"
-  },
-  SCRAP_FOLLOWUP_2: {
-    nameFields: ["SCRAP_FOLLOWUP_2_TEMPLATE_NAME", "SCRAP_FOLLOW_UP_2_TEMPLATE_NAME"],
-    languageFields: ["SCRAP_FOLLOWUP_2_TEMPLATE_LANGUAGE", "SCRAP_FOLLOW_UP_2_TEMPLATE_LANGUAGE", "WHATSAPP_TEMPLATE_LANGUAGE"],
-    variableModeField: "SCRAP_FOLLOWUP_2_VARIABLE_MODE",
-    variablesField: "SCRAP_FOLLOWUP_2_VARIABLES"
-  },
   // Company-specific (Global Skin Care): appointment follow-up template used to
   // remind a customer of the appointment extracted from their call transcript.
   APPOINTMENT_FOLLOWUP: {
