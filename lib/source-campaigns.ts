@@ -689,16 +689,39 @@ export async function runDueSourceCampaignSteps({
       await wait(sendGapMs);
     }
     attemptedSends += 1;
-    results.push(
-      await sendEnrollmentStep({
-        enrollment,
+
+    // A single enrollment throwing (transient Meta/Google error, etc.) must
+    // never abort the batch: enrollments are read in nextSendAt order, so an
+    // unhandled exception here would permanently block every enrollment due
+    // after this one on every subsequent run.
+    try {
+      results.push(
+        await sendEnrollmentStep({
+          enrollment,
+          stepNumber: enrollment.nextStepNumber ?? 1,
+          userId,
+          whatsappConfig,
+          sheetConfig,
+          endpoint
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Campaign step failed unexpectedly.";
+      console.error("[source-campaigns] enrollment step failed", {
+        tenantId,
+        enrollmentId: enrollment.id,
+        campaignKey: enrollment.campaign.key,
+        error: message
+      });
+      results.push({
+        enrollmentId: enrollment.id,
+        campaignKey: enrollment.campaign.key,
+        phone: enrollment.contact.phone,
+        status: "failed",
         stepNumber: enrollment.nextStepNumber ?? 1,
-        userId,
-        whatsappConfig,
-        sheetConfig,
-        endpoint
-      })
-    );
+        reason: message
+      });
+    }
   }
 
   return {

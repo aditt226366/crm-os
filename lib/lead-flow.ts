@@ -640,6 +640,182 @@ async function markCrmLeadContacted(leadId: string) {
   });
 }
 
+type LeadFlowResultEntry = {
+  phone: string;
+  status: string;
+  reason?: string | null;
+  sourceSheet?: string | null;
+  rowNumber?: number;
+  sheetStatus?: string | null;
+  retryAfter?: unknown;
+  conversationId?: string;
+  messageId?: string | null;
+  whatsappMessageId?: string | null;
+  campaignKey?: string;
+  campaignStatus?: string;
+  campaignStep?: number;
+  sheetUpdated?: boolean;
+};
+
+async function processSheetLead({
+  tenantId,
+  userId,
+  sheetLead,
+  sheetsConfig,
+  sheetRange,
+  sheetCampaignConfig,
+  statusColumnCache,
+  sendGapMs,
+  sendState
+}: {
+  tenantId: string;
+  userId: string;
+  sheetLead: SheetLead;
+  sheetsConfig: IntegrationConfig;
+  sheetRange: string;
+  sheetCampaignConfig: SheetCampaignConfig | null;
+  statusColumnCache: Map<string, number | null>;
+  sendGapMs: number;
+  sendState: { attemptedSends: number };
+}): Promise<LeadFlowResultEntry> {
+  const { contact, conversation } = await upsertLeadConversation({ tenantId, lead: sheetLead });
+  const leadRecord = await prisma.lead.findFirst({
+    where: { tenantId, contactId: contact.id },
+    select: { id: true }
+  });
+
+  if (contact.optOut) {
+    await safeMarkSheetLeadStatus({
+      config: sheetsConfig,
+      range: sheetRange,
+      lead: sheetLead,
+      status: "failure",
+      statusColumnCache
+    });
+    return {
+      phone: contact.phone,
+      status: "skipped",
+      reason: "Contact opted out",
+      sourceSheet: sheetLead.sourceSheet,
+      rowNumber: sheetLead.rowNumber
+    };
+  }
+
+  const deliveryLimit = await activeMetaDeliveryLimitForContact({
+    tenantId,
+    contactId: contact.id,
+    customFields: contact.customFields
+  });
+  if (deliveryLimit) {
+    const failureReason = metaDeliveryLimitReason(deliveryLimit);
+    await safeMarkSheetLeadStatus({
+      config: sheetsConfig,
+      range: sheetRange,
+      lead: sheetLead,
+      status: META_DELIVERY_LIMIT_DISPLAY,
+      statusColumnCache
+    });
+    return {
+      phone: contact.phone,
+      status: "META_DELIVERY_LIMITED",
+      reason: failureReason,
+      retryAfter: deliveryLimit.retryAfter,
+      sourceSheet: sheetLead.sourceSheet,
+      rowNumber: sheetLead.rowNumber,
+      sheetStatus: sheetLead.status ?? null
+    };
+  }
+
+  const sourceCampaignEnrollment = await enrollImportedLeadInSourceCampaign({
+    tenantId,
+    leadId: leadRecord?.id,
+    contactId: contact.id,
+    conversationId: conversation.id,
+    sourceSheet: sheetLead.sourceSheet,
+    sheetConfig: sheetCampaignConfig
+  });
+
+  if (!sourceCampaignEnrollment) {
+    // Every lead is messaged through its sheet's drip campaign (step 1 = welcome
+    // template, step 2 = follow-up day 1, step 3 = follow-up day 2, ...). A lead
+    // whose source_sheet has no configured drip is left untouched so it is picked
+    // up automatically once the operator adds that sheet under Sheet Drip
+    // Campaigns. We record a clear, actionable reason and do not mark the sheet.
+    return {
+      phone: contact.phone,
+      status: "skipped",
+      reason: sheetLead.sourceSheet
+        ? `No drip campaign configured for sheet "${sheetLead.sourceSheet}". Add it under Broadcast & Campaign Templates → Sheet Drip Campaigns.`
+        : "Lead row has no source_sheet; cannot route to a drip campaign. Check the crm_leads formula columns.",
+      sourceSheet: sheetLead.sourceSheet,
+      rowNumber: sheetLead.rowNumber,
+      sheetStatus: sheetLead.status ?? null
+    };
+  }
+
+  if (sendState.attemptedSends > 0 && sendGapMs > 0) {
+    await wait(sendGapMs);
+  }
+  sendState.attemptedSends += 1;
+
+  const campaignRun: SourceCampaignRunResult = await runDueSourceCampaignSteps({
+    tenantId,
+    userId,
+    enrollmentId: sourceCampaignEnrollment.enrollment.id,
+    maxSends: 1,
+    endpoint: "/api/app/leads"
+  });
+  const campaignResult = campaignRun.results[0] ?? null;
+  const campaignSent =
+    campaignResult?.status === "sent" ||
+    campaignResult?.status === "completed" ||
+    (!campaignResult && sourceCampaignEnrollment.enrollment.currentStep > 0);
+  const campaignFailed = campaignResult?.status === "failed";
+  let sheetUpdate: Awaited<ReturnType<typeof safeMarkSheetLeadMessaged>> | null = null;
+
+  if (campaignSent) {
+    if (leadRecord) {
+      await markCrmLeadContacted(leadRecord.id);
+    }
+    sheetUpdate = await safeMarkSheetLeadMessaged({
+      config: sheetsConfig,
+      range: sheetRange,
+      lead: sheetLead,
+      statusColumnCache
+    });
+  } else if (campaignFailed) {
+    await safeMarkSheetLeadStatus({
+      config: sheetsConfig,
+      range: sheetRange,
+      lead: sheetLead,
+      status: "failure",
+      statusColumnCache
+    });
+  }
+
+  return {
+    phone: contact.phone,
+    status: campaignSent ? "sent" : campaignFailed ? "failed" : "skipped",
+    reason:
+      campaignResult?.reason ??
+      (campaignSent
+        ? null
+        : sourceCampaignEnrollment.enrollment.status === "ACTIVE"
+          ? "Campaign already enrolled; no due step right now."
+          : `Campaign enrollment is ${sourceCampaignEnrollment.enrollment.status}`),
+    conversationId: conversation.id,
+    messageId: campaignResult?.messageId ?? null,
+    whatsappMessageId: campaignResult?.whatsappMessageId ?? null,
+    campaignKey: sourceCampaignEnrollment.campaign.key,
+    campaignStatus: sourceCampaignEnrollment.enrollment.status,
+    campaignStep: campaignResult?.stepNumber ?? sourceCampaignEnrollment.enrollment.currentStep,
+    sourceSheet: sheetLead.sourceSheet,
+    rowNumber: sheetLead.rowNumber,
+    sheetStatus: sheetLead.status ?? null,
+    sheetUpdated: sheetUpdate ? sheetUpdate.ok : false
+  };
+}
+
 export async function runGoogleSheetLeadFlow({
   tenantId,
   userId,
@@ -681,9 +857,9 @@ export async function runGoogleSheetLeadFlow({
   const sheetLeads = sheetSource.leads;
   const statusColumnCache = new Map<string, number | null>();
 
-  const results = [];
+  const results: LeadFlowResultEntry[] = [];
   const sendGapMs = configuredLeadSendGapMs();
-  let attemptedSends = 0;
+  const sendState = { attemptedSends: 0 };
 
   for (const sheetLead of sheetLeads) {
     const sheetStatus = normalizedSheetStatus(sheetLead.status);
@@ -699,144 +875,41 @@ export async function runGoogleSheetLeadFlow({
       continue;
     }
 
-    const { contact, conversation } = await upsertLeadConversation({ tenantId, lead: sheetLead });
-    const leadRecord = await prisma.lead.findFirst({
-      where: { tenantId, contactId: contact.id },
-      select: { id: true }
-    });
-
-    if (contact.optOut) {
-      await safeMarkSheetLeadStatus({
-        config: sheetsConfig,
-        range: sheetRange,
-        lead: sheetLead,
-        status: "failure",
-        statusColumnCache
+    // A single lead throwing (transient Meta/Google error, malformed row, etc.)
+    // must never abort the whole run: sheetLeads is read in the same order every
+    // tick, so an unhandled exception here would permanently block every lead
+    // below this one — including any newly added leads, which always sort last.
+    try {
+      const result = await processSheetLead({
+        tenantId,
+        userId,
+        sheetLead,
+        sheetsConfig,
+        sheetRange,
+        sheetCampaignConfig,
+        statusColumnCache,
+        sendGapMs,
+        sendState
       });
-      results.push({
-        phone: contact.phone,
-        status: "skipped",
-        reason: "Contact opted out",
+      results.push(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Lead processing failed unexpectedly.";
+      console.error("[lead-flow] lead processing failed", {
+        tenantId,
+        phone: sheetLead.phone,
+        rowNumber: sheetLead.rowNumber,
         sourceSheet: sheetLead.sourceSheet,
-        rowNumber: sheetLead.rowNumber
-      });
-      continue;
-    }
-
-    const deliveryLimit = await activeMetaDeliveryLimitForContact({
-      tenantId,
-      contactId: contact.id,
-      customFields: contact.customFields
-    });
-    if (deliveryLimit) {
-      const failureReason = metaDeliveryLimitReason(deliveryLimit);
-      await safeMarkSheetLeadStatus({
-        config: sheetsConfig,
-        range: sheetRange,
-        lead: sheetLead,
-        status: META_DELIVERY_LIMIT_DISPLAY,
-        statusColumnCache
+        error: message
       });
       results.push({
-        phone: contact.phone,
-        status: "META_DELIVERY_LIMITED",
-        reason: failureReason,
-        retryAfter: deliveryLimit.retryAfter,
+        phone: sheetLead.phone,
+        status: "failed",
+        reason: message,
         sourceSheet: sheetLead.sourceSheet,
         rowNumber: sheetLead.rowNumber,
         sheetStatus: sheetLead.status ?? null
       });
-      continue;
     }
-
-    const sourceCampaignEnrollment = await enrollImportedLeadInSourceCampaign({
-      tenantId,
-      leadId: leadRecord?.id,
-      contactId: contact.id,
-      conversationId: conversation.id,
-      sourceSheet: sheetLead.sourceSheet,
-      sheetConfig: sheetCampaignConfig
-    });
-    if (sourceCampaignEnrollment) {
-      if (attemptedSends > 0 && sendGapMs > 0) {
-        await wait(sendGapMs);
-      }
-      attemptedSends += 1;
-
-      const campaignRun: SourceCampaignRunResult = await runDueSourceCampaignSteps({
-        tenantId,
-        userId,
-        enrollmentId: sourceCampaignEnrollment.enrollment.id,
-        maxSends: 1,
-        endpoint: "/api/app/leads"
-      });
-      const campaignResult = campaignRun.results[0] ?? null;
-      const campaignSent =
-        campaignResult?.status === "sent" ||
-        campaignResult?.status === "completed" ||
-        (!campaignResult && sourceCampaignEnrollment.enrollment.currentStep > 0);
-      const campaignFailed = campaignResult?.status === "failed";
-      let sheetUpdate: Awaited<ReturnType<typeof safeMarkSheetLeadMessaged>> | null = null;
-
-      if (campaignSent) {
-        if (leadRecord) {
-          await markCrmLeadContacted(leadRecord.id);
-        }
-        sheetUpdate = await safeMarkSheetLeadMessaged({
-          config: sheetsConfig,
-          range: sheetRange,
-          lead: sheetLead,
-          statusColumnCache
-        });
-      } else if (campaignFailed) {
-        await safeMarkSheetLeadStatus({
-          config: sheetsConfig,
-          range: sheetRange,
-          lead: sheetLead,
-          status: "failure",
-          statusColumnCache
-        });
-      }
-
-      results.push({
-        phone: contact.phone,
-        status: campaignSent ? "sent" : campaignFailed ? "failed" : "skipped",
-        reason:
-          campaignResult?.reason ??
-          (campaignSent
-            ? null
-            : sourceCampaignEnrollment.enrollment.status === "ACTIVE"
-              ? "Campaign already enrolled; no due step right now."
-              : `Campaign enrollment is ${sourceCampaignEnrollment.enrollment.status}`),
-        conversationId: conversation.id,
-        messageId: campaignResult?.messageId ?? null,
-        whatsappMessageId: campaignResult?.whatsappMessageId ?? null,
-        campaignKey: sourceCampaignEnrollment.campaign.key,
-        campaignStatus: sourceCampaignEnrollment.enrollment.status,
-        campaignStep: campaignResult?.stepNumber ?? sourceCampaignEnrollment.enrollment.currentStep,
-        sourceSheet: sheetLead.sourceSheet,
-        rowNumber: sheetLead.rowNumber,
-        sheetStatus: sheetLead.status ?? null,
-        sheetUpdated: sheetUpdate ? sheetUpdate.ok : false
-      });
-      continue;
-    }
-
-    // Every lead is messaged through its sheet's drip campaign (step 1 = welcome
-    // template, step 2 = follow-up day 1, step 3 = follow-up day 2, ...). A lead
-    // whose source_sheet has no configured drip is left untouched so it is picked
-    // up automatically once the operator adds that sheet under Sheet Drip
-    // Campaigns. We record a clear, actionable reason and do not mark the sheet.
-    results.push({
-      phone: contact.phone,
-      status: "skipped",
-      reason: sheetLead.sourceSheet
-        ? `No drip campaign configured for sheet "${sheetLead.sourceSheet}". Add it under Broadcast & Campaign Templates → Sheet Drip Campaigns.`
-        : "Lead row has no source_sheet; cannot route to a drip campaign. Check the crm_leads formula columns.",
-      sourceSheet: sheetLead.sourceSheet,
-      rowNumber: sheetLead.rowNumber,
-      sheetStatus: sheetLead.status ?? null
-    });
   }
 
   await safeCreateAuditLog({
