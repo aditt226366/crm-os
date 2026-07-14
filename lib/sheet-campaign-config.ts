@@ -42,6 +42,13 @@ function normalizeKey(value: string | null | undefined) {
   return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+// Strips ALL whitespace/punctuation so cosmetic typos in the admin panel (e.g.
+// configuring "UGLeads" while the actual Google Sheet tab is "UG Leads") still
+// route correctly. Only used as a fallback after an exact match fails.
+function looseKey(value: string | null | undefined) {
+  return (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -111,7 +118,16 @@ export function sheetCampaignForSheet(
   if (!config) return null;
   const key = normalizeKey(sheetName);
   if (!key) return null;
-  return config.sheets.find((sheet) => normalizeKey(sheet.sheetName) === key) ?? null;
+
+  const exact = config.sheets.find((sheet) => normalizeKey(sheet.sheetName) === key);
+  if (exact) return exact;
+
+  // Fallback: match ignoring spaces/punctuation, e.g. the admin panel has
+  // "UGLeads" configured but the Google Sheet tab (and source_sheet column) is
+  // actually "UG Leads".
+  const loose = looseKey(sheetName);
+  if (!loose) return null;
+  return config.sheets.find((sheet) => looseKey(sheet.sheetName) === loose) ?? null;
 }
 
 export function isConfiguredSheet(config: SheetCampaignConfig | null, sheetName: string | null | undefined) {
@@ -119,7 +135,12 @@ export function isConfiguredSheet(config: SheetCampaignConfig | null, sheetName:
 }
 
 export function canonicalSheetName(config: SheetCampaignConfig | null, sheetName: string | null | undefined) {
-  return sheetCampaignForSheet(config, sheetName)?.sheetName ?? sheetName?.trim() ?? null;
+  // Prefer the incoming sheetName: it comes straight from the lead's
+  // source_sheet column, i.e. the real Google Sheet tab name. The configured
+  // label can differ cosmetically (see the loose-match fallback above), and
+  // using the wrong one here would make status write-back target a tab that
+  // doesn't exist.
+  return sheetName?.trim() || sheetCampaignForSheet(config, sheetName)?.sheetName || null;
 }
 
 export function combinedSheetName(config: SheetCampaignConfig | null) {

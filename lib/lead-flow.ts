@@ -741,11 +741,14 @@ async function processSheetLead({
     // whose source_sheet has no configured drip is left untouched so it is picked
     // up automatically once the operator adds that sheet under Sheet Drip
     // Campaigns. We record a clear, actionable reason and do not mark the sheet.
+    const configuredSheetNames = sheetCampaignConfig?.sheets.map((sheet) => sheet.sheetName) ?? [];
     return {
       phone: contact.phone,
       status: "skipped",
       reason: sheetLead.sourceSheet
-        ? `No drip campaign configured for sheet "${sheetLead.sourceSheet}". Add it under Broadcast & Campaign Templates → Sheet Drip Campaigns.`
+        ? `No drip campaign configured for sheet "${sheetLead.sourceSheet}". Add it under Broadcast & Campaign Templates → Sheet Drip Campaigns.${
+            configuredSheetNames.length ? ` Configured sheets: ${configuredSheetNames.join(", ")}.` : ""
+          }`
         : "Lead row has no source_sheet; cannot route to a drip campaign. Check the crm_leads formula columns.",
       sourceSheet: sheetLead.sourceSheet,
       rowNumber: sheetLead.rowNumber,
