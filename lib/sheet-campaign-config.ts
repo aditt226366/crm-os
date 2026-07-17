@@ -134,6 +134,19 @@ export function isConfiguredSheet(config: SheetCampaignConfig | null, sheetName:
   return Boolean(sheetCampaignForSheet(config, sheetName));
 }
 
+/**
+ * True when the tenant has exactly one sheet configured. A single-sheet
+ * company reads and writes that sheet directly — every lead implicitly
+ * belongs to it, and there is no separate read-only merged/combined tab.
+ */
+export function isSingleSheetMode(config: SheetCampaignConfig | null) {
+  return Boolean(config && config.sheets.length === 1);
+}
+
+export function singleSheetName(config: SheetCampaignConfig | null): string | null {
+  return isSingleSheetMode(config) ? (config as SheetCampaignConfig).sheets[0].sheetName : null;
+}
+
 export function canonicalSheetName(config: SheetCampaignConfig | null, sheetName: string | null | undefined) {
   // Prefer the incoming sheetName: it comes straight from the lead's
   // source_sheet column, i.e. the real Google Sheet tab name. The configured

@@ -78,8 +78,16 @@ type LeadRecord = {
   } | null;
 };
 
+type SheetCampaignsSummary = {
+  mode: "single" | "combined" | "unconfigured";
+  sheetTab: string | null;
+  sheets: string[];
+  combinedSheet: string | null;
+};
+
 type LeadData = {
   integrations: IntegrationStatus[];
+  sheetCampaigns: SheetCampaignsSummary;
   templates: TemplateRecord[];
   metrics: {
     total: number;
@@ -116,7 +124,16 @@ const flowIcons: Record<string, typeof FileSpreadsheet> = {
   KNOWLEDGE_BASE: DatabaseZap,
   AI_MODEL: Bot
 };
-const MASTER_SHEET_TAB = "crm_leads";
+
+function sheetOutreachCaption(sheetCampaigns: SheetCampaignsSummary) {
+  if (sheetCampaigns.mode === "single") {
+    return `Reads leads directly from "${sheetCampaigns.sheetTab}".`;
+  }
+  if (sheetCampaigns.mode === "combined") {
+    return `Reads the combined sheet "${sheetCampaigns.sheetTab}", routing each row to its sheet's drip (${sheetCampaigns.sheets.join(", ")}).`;
+  }
+  return "No sheet is configured yet. Add one under Broadcast & Campaign Templates → Sheet Drip Campaigns.";
+}
 
 function metricCards(data: LeadData) {
   return [
@@ -330,7 +347,7 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                   <label className="space-y-2">
                     <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sheet tab</span>
                     <div className="flex h-11 w-full items-center rounded-2xl border border-white/10 bg-white/[0.04] px-3 text-sm font-semibold text-white">
-                      {MASTER_SHEET_TAB}
+                      {data.sheetCampaigns.sheetTab ?? "Not configured"}
                     </div>
                   </label>
                   <label className="space-y-2">
@@ -346,10 +363,10 @@ export function LeadManagementPage({ initialSearch = "" }: { initialSearch?: str
                   </label>
                   <div className="md:col-span-2 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-white">Configured welcome template</p>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">Template settings integration supplies this company&apos;s main approved template.</p>
+                      <p className="truncate text-sm font-semibold text-white">Sheet drip campaigns</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{sheetOutreachCaption(data.sheetCampaigns)}</p>
                     </div>
-                    <NeonButton loading={running} disabled={!ready} className="shrink-0">
+                    <NeonButton loading={running} disabled={!ready || data.sheetCampaigns.mode === "unconfigured"} className="shrink-0">
                       <Play className="h-4 w-4" />
                       Import Leads & Send Template
                     </NeonButton>

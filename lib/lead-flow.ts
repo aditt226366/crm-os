@@ -10,6 +10,7 @@ import {
   ensureGoogleSheetStatusColumn,
   googleSheetTabRange,
   isCrmLeadsRange,
+  normalizeSheetRangeKey,
   readGoogleSheetLeads,
   updateGoogleSheetLeadStatuses,
   type SheetLead
@@ -19,7 +20,12 @@ import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig, type IntegrationConfig } from "@/lib/integration-vault";
 import { emitTenantEvent } from "@/lib/realtime";
-import { loadSheetCampaignConfig, type SheetCampaignConfig } from "@/lib/sheet-campaign-config";
+import {
+  combinedSheetName,
+  loadSheetCampaignConfig,
+  singleSheetName,
+  type SheetCampaignConfig
+} from "@/lib/sheet-campaign-config";
 import {
   enrollImportedLeadInSourceCampaign,
   runDueSourceCampaignSteps,
@@ -127,19 +133,34 @@ function sourceSheetFromMetadata(metadata: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function sourceWritebackSheetName(lead: SheetLead) {
+/**
+ * True when `range` is a read-only merged/combined sheet that must never be
+ * written to directly: either the literal "crm_leads" tab (V9's spill-formula
+ * convention), or this tenant's own configured combined sheet name (e.g.
+ * "final_sheet"). Both are produced by an array/spill formula that owns its
+ * output cells — writing to them throws "Array result was not expanded ...".
+ * Only relevant when 2+ sheets are configured; a single-sheet tenant's one
+ * sheet is read and written directly, so it is never "protected".
+ */
+function isProtectedCombinedRange(range: string, sheetCampaignConfig: SheetCampaignConfig | null) {
+  if (isCrmLeadsRange(range)) return true;
+  if (!sheetCampaignConfig || sheetCampaignConfig.sheets.length < 2) return false;
+  const combinedRange = googleSheetTabRange(combinedSheetName(sheetCampaignConfig));
+  return normalizeSheetRangeKey(range) === normalizeSheetRangeKey(combinedRange);
+}
+
+function sourceWritebackSheetName(lead: SheetLead, sheetCampaignConfig: SheetCampaignConfig | null) {
   const sourceSheet = lead.sourceSheet?.trim();
   if (!sourceSheet) return null;
   // Write status back to the originating source tab for ANY lead that carries a
-  // source_sheet — not only registered campaign sheets. The one tab we must never
-  // write to is crm_leads: it is produced by a spill array formula that owns its
-  // output cells, so writing there throws "Array result was not expanded ...".
-  if (isCrmLeadsRange(googleSheetTabRange(sourceSheet))) return null;
+  // source_sheet — not only registered campaign sheets. We must never write
+  // directly into the tenant's read-only combined/merged tab.
+  if (isProtectedCombinedRange(googleSheetTabRange(sourceSheet), sheetCampaignConfig)) return null;
   return sourceSheet;
 }
 
-function sourceWritebackTarget(lead: SheetLead) {
-  const sourceSheet = sourceWritebackSheetName(lead);
+function sourceWritebackTarget(lead: SheetLead, sheetCampaignConfig: SheetCampaignConfig | null) {
+  const sourceSheet = sourceWritebackSheetName(lead, sheetCampaignConfig);
   if (!sourceSheet || !lead.sourceRow) return null;
   return {
     range: googleSheetTabRange(sourceSheet),
@@ -149,7 +170,7 @@ function sourceWritebackTarget(lead: SheetLead) {
   };
 }
 
-function isMissingCrmLeadsTabError(error: unknown) {
+function isMissingSheetTabError(error: unknown) {
   return (
     error instanceof ApiError &&
     error.code === "GOOGLE_SHEETS_READ_FAILED" &&
@@ -157,25 +178,52 @@ function isMissingCrmLeadsTabError(error: unknown) {
   );
 }
 
+/**
+ * Reads leads from the tenant's configured sheet(s):
+ *  - exactly one sheet configured -> read and write that sheet directly (no
+ *    combined tab required); every lead implicitly belongs to it.
+ *  - two or more sheets configured -> read the tenant's configured combined
+ *    sheet (default "crm_leads" for backward compatibility with tenants who
+ *    haven't renamed it); each row must carry its own source_sheet.
+ *  - nothing configured yet -> fall back to the first sheet in the workbook,
+ *    same as before any drip campaigns exist.
+ * If the target tab can't be found, falls back to the first sheet so a typo
+ * degrades gracefully instead of failing the whole run.
+ */
 async function readSheetLeadsForFlow({
   config,
-  maxRows
+  maxRows,
+  sheetCampaignConfig
 }: {
   config: IntegrationConfig;
   maxRows: number;
+  sheetCampaignConfig: SheetCampaignConfig | null;
 }) {
+  const singleSheet = singleSheetName(sheetCampaignConfig);
+  if (singleSheet) {
+    const range = googleSheetTabRange(singleSheet);
+    const leads = await readGoogleSheetLeads({ config, range, maxRows });
+    return {
+      range,
+      readOnlyMaster: false,
+      leads: leads.map((lead) => (lead.sourceSheet ? lead : { ...lead, sourceSheet: singleSheet }))
+    };
+  }
+
+  const combinedRange = sheetCampaignConfig ? googleSheetTabRange(combinedSheetName(sheetCampaignConfig)) : CRM_LEADS_RANGE;
+
   try {
     return {
-      range: CRM_LEADS_RANGE,
+      range: combinedRange,
       readOnlyMaster: true,
       leads: await readGoogleSheetLeads({
         config,
-        range: CRM_LEADS_RANGE,
+        range: combinedRange,
         maxRows
       })
     };
   } catch (error) {
-    if (!isMissingCrmLeadsTabError(error)) {
+    if (!isMissingSheetTabError(error)) {
       throw error;
     }
   }
@@ -257,24 +305,26 @@ async function safeMarkSheetLeadStatus({
   range,
   lead,
   status,
-  statusColumnCache
+  statusColumnCache,
+  sheetCampaignConfig
 }: {
   config: IntegrationConfig;
   range: string;
   lead: SheetLead;
   status: string;
   statusColumnCache: Map<string, number | null>;
+  sheetCampaignConfig: SheetCampaignConfig | null;
 }) {
-  const sourceTarget = sourceWritebackTarget(lead);
+  const sourceTarget = sourceWritebackTarget(lead, sheetCampaignConfig);
   const targetRange = sourceTarget?.range ?? range;
   const targetRowNumber = sourceTarget?.rowNumber ?? lead.rowNumber;
 
-  if (!sourceTarget && isCrmLeadsRange(range)) {
+  if (!sourceTarget && isProtectedCombinedRange(range, sheetCampaignConfig)) {
     return {
       ok: false,
       skipped: false as const,
       error:
-        "Missing source_sheet/source_row in crm_leads; status write-back skipped — check the crm_leads formula columns. Lead status is still tracked in the CRM."
+        "Missing source_sheet/source_row in the combined sheet; status write-back skipped — check the combined sheet's formula columns. Lead status is still tracked in the CRM."
     };
   }
 
@@ -348,6 +398,7 @@ type LeadFlowSummaryOptions = {
 
 export async function leadFlowSummary(tenantId: string, options: LeadFlowSummaryOptions = {}) {
   const integrations = await currentFlowIntegrations(tenantId);
+  const sheetCampaignConfig = await loadSheetCampaignConfig(tenantId);
   const limit = Math.min(Math.max(1, Math.floor(options.limit ?? 50)), 100);
   const search = options.search?.trim().slice(0, 80);
   const where: Prisma.LeadWhereInput = { tenantId };
@@ -476,8 +527,18 @@ export async function leadFlowSummary(tenantId: string, options: LeadFlowSummary
     };
   });
 
+  const singleSheet = singleSheetName(sheetCampaignConfig);
+  const sheetNames = sheetCampaignConfig?.sheets.map((sheet) => sheet.sheetName) ?? [];
+  const sheetCampaigns = {
+    mode: singleSheet ? ("single" as const) : sheetNames.length ? ("combined" as const) : ("unconfigured" as const),
+    sheetTab: singleSheet ?? (sheetNames.length ? combinedSheetName(sheetCampaignConfig) : null),
+    sheets: sheetNames,
+    combinedSheet: sheetNames.length > 1 ? combinedSheetName(sheetCampaignConfig) : null
+  };
+
   return {
     integrations: mappedIntegrations,
+    sheetCampaigns,
     templates: templates.map((template) => ({
       id: template.id,
       name: template.name,
@@ -690,7 +751,8 @@ async function processSheetLead({
       range: sheetRange,
       lead: sheetLead,
       status: "failure",
-      statusColumnCache
+      statusColumnCache,
+      sheetCampaignConfig
     });
     return {
       phone: contact.phone,
@@ -713,7 +775,8 @@ async function processSheetLead({
       range: sheetRange,
       lead: sheetLead,
       status: META_DELIVERY_LIMIT_DISPLAY,
-      statusColumnCache
+      statusColumnCache,
+      sheetCampaignConfig
     });
     return {
       phone: contact.phone,
@@ -749,7 +812,7 @@ async function processSheetLead({
         ? `No drip campaign configured for sheet "${sheetLead.sourceSheet}". Add it under Broadcast & Campaign Templates → Sheet Drip Campaigns.${
             configuredSheetNames.length ? ` Configured sheets: ${configuredSheetNames.join(", ")}.` : ""
           }`
-        : "Lead row has no source_sheet; cannot route to a drip campaign. Check the crm_leads formula columns.",
+        : "Lead row has no source_sheet; cannot route to a drip campaign. Check the combined sheet's formula columns.",
       sourceSheet: sheetLead.sourceSheet,
       rowNumber: sheetLead.rowNumber,
       sheetStatus: sheetLead.status ?? null
@@ -784,7 +847,8 @@ async function processSheetLead({
       config: sheetsConfig,
       range: sheetRange,
       lead: sheetLead,
-      statusColumnCache
+      statusColumnCache,
+      sheetCampaignConfig
     });
   } else if (campaignFailed) {
     await safeMarkSheetLeadStatus({
@@ -792,7 +856,8 @@ async function processSheetLead({
       range: sheetRange,
       lead: sheetLead,
       status: "failure",
-      statusColumnCache
+      statusColumnCache,
+      sheetCampaignConfig
     });
   }
 
@@ -854,7 +919,8 @@ export async function runGoogleSheetLeadFlow({
 
   const sheetSource = await readSheetLeadsForFlow({
     config: sheetsConfig,
-    maxRows: Math.min(Math.max(maxRows ?? 200, 1), 200)
+    maxRows: Math.min(Math.max(maxRows ?? 200, 1), 200),
+    sheetCampaignConfig
   });
   const sheetRange = sheetSource.range;
   const sheetLeads = sheetSource.leads;

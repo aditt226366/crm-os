@@ -112,8 +112,13 @@ export function googleSheetTabRange(sheetName: string) {
   return `${quoteSheetName(sheetName.trim())}!A:Z`;
 }
 
+/** Normalizes an A1 range string (quotes, case) so two ranges can be compared for equality. */
+export function normalizeSheetRangeKey(range: string) {
+  return range.trim().toLowerCase().replace(/^'/, "").replace(/'!/, "!");
+}
+
 export function isCrmLeadsRange(range: string) {
-  const normalized = range.trim().toLowerCase().replace(/^'/, "").replace(/'!/, "!");
+  const normalized = normalizeSheetRangeKey(range);
   return normalized === CRM_LEADS_RANGE.toLowerCase() || normalized === `${CRM_LEADS_SHEET_NAME}!a:z`;
 }
 

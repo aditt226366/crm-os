@@ -134,20 +134,30 @@ export function SheetCampaignsBuilder({
   const removeTemplate = (sheetIndex: number, templateIndex: number) =>
     updateSheet(sheetIndex, { templates: model.sheets[sheetIndex].templates.filter((_, i) => i !== templateIndex) });
 
+  const needsCombinedSheet = model.sheets.length > 1;
+
   return (
     <div className="space-y-4">
-      <div>
-        <label className={labelClass}>Combined sheet name</label>
-        <input
-          value={model.combinedSheet}
-          onChange={(event) => emit({ ...model, combinedSheet: event.target.value })}
-          placeholder={DEFAULT_COMBINED_SHEET}
-          className={inputClass}
-        />
-        <p className="mt-1 text-xs leading-5 text-slate-500">
-          The single tab all source sheets are merged into (leads are read from here; each row must carry a source_sheet).
+      {needsCombinedSheet ? (
+        <div>
+          <label className={labelClass}>Combined sheet name</label>
+          <input
+            value={model.combinedSheet}
+            onChange={(event) => emit({ ...model, combinedSheet: event.target.value })}
+            placeholder={DEFAULT_COMBINED_SHEET}
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            The single tab all source sheets are merged into (leads are read from here; each row must carry a source_sheet).
+            Required because more than one sheet is configured below.
+          </p>
+        </div>
+      ) : (
+        <p className="rounded-xl border border-white/10 bg-slate-950/40 p-3 text-xs leading-5 text-slate-500">
+          With only one sheet configured, leads are read and status is written directly to that sheet &mdash; no combined
+          sheet is needed. Add a second sheet below if you want to merge multiple source sheets into one combined tab.
         </p>
-      </div>
+      )}
 
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-white">Sheets ({model.sheets.length})</p>
