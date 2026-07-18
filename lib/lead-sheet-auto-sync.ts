@@ -316,76 +316,47 @@ export async function runDueGoogleSheetLeadFlows({
     const runs: LeadSheetAutoSyncTenantRun[] = [];
 
     for (const candidate of candidates) {
-      // Company-specific (Global Skin Care): read call transcripts, extract the
-      // appointment with AI, and send the appointment follow-up template. This
-      // tenant does not run the generic crm_leads flow (which would misfire on
-      // the transcript tab).
+      // Company-specific (Global Skin Care): if a call-transcript tab is present,
+      // run the AI appointment follow-up as an ADDITIONAL best-effort step. This
+      // no longer replaces the normal lead-drip flow — Global Skin Care falls
+      // through to the generic flow below so its ad-form / sheet leads still get
+      // their welcome + drip templates.
       if (isGlobalSkincareTenant(candidate)) {
-        const missingIntegrations = missingConnectedIntegrations(candidate, GLOBAL_SKINCARE_REQUIRED_INTEGRATIONS);
-        if (missingIntegrations.length) {
-          runs.push({
-            tenantId: candidate.id,
-            tenantName: candidate.name,
-            status: "skipped",
-            reason: `Missing connected integrations: ${missingIntegrations.join(", ")}`,
-            missingIntegrations
-          });
-          continue;
+        const gscActor = candidate.users.find((user) => user.role === "COMPANY_OWNER") ?? candidate.users[0];
+        const gscMissing = missingConnectedIntegrations(candidate, GLOBAL_SKINCARE_REQUIRED_INTEGRATIONS);
+        if (gscActor && !gscMissing.length) {
+          try {
+            const appointment = await runGlobalSkincareAppointmentFollowUps({
+              tenantId: candidate.id,
+              userId: gscActor.id,
+              maxRows
+            });
+            runs.push({
+              tenantId: candidate.id,
+              tenantName: candidate.name,
+              actorUserId: gscActor.id,
+              status: appointment.sent > 0 ? "sent" : "skipped",
+              appointmentFollowUps: {
+                scanned: appointment.scanned,
+                sent: appointment.sent,
+                failed: appointment.failed,
+                skipped: appointment.skipped,
+                noAppointment: appointment.noAppointment,
+                templateMissing: appointment.templateMissing
+              },
+              reason:
+                appointment.reason ??
+                (appointment.sent > 0 ? undefined : "No transcripts needed an appointment follow-up.")
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Appointment follow-up run failed.";
+            console.error("[lead-sheet-auto-sync] global skincare appointment run failed (non-fatal)", {
+              tenantId: candidate.id,
+              error: message
+            });
+          }
         }
-
-        const actor = candidate.users.find((user) => user.role === "COMPANY_OWNER") ?? candidate.users[0];
-        if (!actor) {
-          runs.push({
-            tenantId: candidate.id,
-            tenantName: candidate.name,
-            status: "skipped",
-            reason: "No active company user found for appointment follow-ups."
-          });
-          continue;
-        }
-
-        try {
-          const appointment = await runGlobalSkincareAppointmentFollowUps({
-            tenantId: candidate.id,
-            userId: actor.id,
-            maxRows
-          });
-          runs.push({
-            tenantId: candidate.id,
-            tenantName: candidate.name,
-            actorUserId: actor.id,
-            status: appointment.sent > 0 ? "sent" : "skipped",
-            scanned: appointment.scanned,
-            sent: appointment.sent,
-            failed: appointment.failed,
-            skipped: appointment.skipped,
-            appointmentFollowUps: {
-              scanned: appointment.scanned,
-              sent: appointment.sent,
-              failed: appointment.failed,
-              skipped: appointment.skipped,
-              noAppointment: appointment.noAppointment,
-              templateMissing: appointment.templateMissing
-            },
-            reason:
-              appointment.reason ??
-              (appointment.sent > 0 ? undefined : "No transcripts needed an appointment follow-up.")
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Appointment follow-up run failed.";
-          runs.push({
-            tenantId: candidate.id,
-            tenantName: candidate.name,
-            actorUserId: actor.id,
-            status: "failed",
-            reason: message
-          });
-          console.error("[lead-sheet-auto-sync] global skincare appointment run failed", {
-            tenantId: candidate.id,
-            error: message
-          });
-        }
-        continue;
+        // No `continue` — fall through to the generic sheet-drip flow below.
       }
 
       const missingIntegrations = missingConnectedIntegrations(candidate);
