@@ -43,7 +43,10 @@ function parseModel(value: string): Model {
     parsed = null;
   }
   const record = asRecord(parsed);
-  const combinedSheet = typeof record.combinedSheet === "string" && record.combinedSheet.trim() ? record.combinedSheet : DEFAULT_COMBINED_SHEET;
+  // Keep the raw stored value so the field stays editable (typing spaces,
+  // clearing it, etc.). The default is only a placeholder hint; the backend
+  // (parseSheetCampaignsConfig) applies DEFAULT_COMBINED_SHEET when it's blank.
+  const combinedSheet = typeof record.combinedSheet === "string" ? record.combinedSheet : "";
   const sheetsRaw = Array.isArray(record.sheets) ? record.sheets : [];
   const sheets: SheetRow[] = sheetsRaw.map((sheetRaw) => {
     const sheet = asRecord(sheetRaw);
@@ -72,10 +75,15 @@ function parseModel(value: string): Model {
 }
 
 function serializeModel(model: Model): string {
+  // Store exactly what the user typed — do NOT trim here. This component
+  // re-serializes on every keystroke, so trimming would strip the trailing
+  // space the instant it is typed, making it impossible to type multi-word
+  // names like "UG Leads". The backend trims/normalizes these names when it
+  // parses and matches them (parseSheetCampaignsConfig / sheetCampaignForSheet).
   return JSON.stringify({
-    combinedSheet: model.combinedSheet.trim() || DEFAULT_COMBINED_SHEET,
+    combinedSheet: model.combinedSheet,
     sheets: model.sheets.map((sheet) => ({
-      sheetName: sheet.sheetName.trim(),
+      sheetName: sheet.sheetName,
       templates: sheet.templates.map((template) => {
         let variables: Record<string, string> = {};
         try {
@@ -89,7 +97,7 @@ function serializeModel(model: Model): string {
           variables = {};
         }
         return {
-          name: template.name.trim(),
+          name: template.name,
           language: template.language,
           delayDays: template.delayDays,
           variableMode: template.variableMode,
