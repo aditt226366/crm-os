@@ -328,6 +328,13 @@ export async function enrollImportedLeadInSourceCampaign({
   }
 
   const startTime = new Date();
+  // Honor the delay column for the FIRST step too, so it is authoritative for
+  // every step: delay 0 => send immediately (nextSendAt = now), delay 1 => 1 day
+  // after enrollment, and so on. campaignStartTime stays the anchor that every
+  // later step's delay is measured from (scheduledForStep).
+  const firstStep = [...campaign.steps].sort((a, b) => a.stepNumber - b.stepNumber)[0];
+  const firstDelayDays = Math.max(0, firstStep?.delayDays ?? 0);
+  const firstSendAt = new Date(startTime.getTime() + firstDelayDays * DAY_MS);
   const enrollment = await prisma.automationCampaignEnrollment.create({
     data: {
       tenantId,
@@ -339,7 +346,7 @@ export async function enrollImportedLeadInSourceCampaign({
       status: "ACTIVE",
       currentStep: 0,
       nextStepNumber: 1,
-      nextSendAt: startTime,
+      nextSendAt: firstSendAt,
       campaignStartTime: startTime,
       stepDeliveries: [] as Prisma.InputJsonArray
     },
