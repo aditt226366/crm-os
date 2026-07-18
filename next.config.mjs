@@ -10,6 +10,19 @@ const nextConfig = {
   turbopack: {
     root: projectRoot
   },
+  typescript: {
+    // The type-check step spawns a worker thread on a host that is thread
+    // constrained (it aborted with a uv_thread_create assertion during the
+    // deploy build). Types are already validated by `npm run typecheck` (tsc
+    // --noEmit) before every push, so re-running the check here is redundant and
+    // only risks the build. Skip it during `next build`.
+    ignoreBuildErrors: true
+  },
+  eslint: {
+    // Same rationale: lint runs in our pre-push checks (`npm run lint`); skipping
+    // it during the deploy build avoids another worker thread on a starved host.
+    ignoreDuringBuilds: true
+  },
   experimental: {
     // The deploy build host is thread/process constrained. Next fans static
     // page generation across ~4 workers by default, and each worker spins up a
