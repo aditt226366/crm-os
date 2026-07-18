@@ -822,19 +822,36 @@ async function processSheetLead({
     };
   }
 
-  if (sendState.attemptedSends > 0 && sendGapMs > 0) {
-    await wait(sendGapMs);
-  }
-  sendState.attemptedSends += 1;
+  // Only throttle — and only run the send scan — for leads that actually have a
+  // step due *right now*. The send gap exists to space out WhatsApp API calls, so
+  // applying it to leads that are already sent/completed or whose next step is
+  // scheduled for the future is pure dead time: it made a full sheet pass cost
+  // sendGapMs x (every row), so a newly added lead sat behind every row above it
+  // and trickled out minutes late. Leads not due now fall through to the
+  // enrollment-based result below with no wait and no extra query.
+  const enrollment = sourceCampaignEnrollment.enrollment;
+  const dueNow =
+    enrollment.status === "ACTIVE" &&
+    enrollment.nextStepNumber != null &&
+    enrollment.nextSendAt != null &&
+    enrollment.nextSendAt.getTime() <= Date.now();
 
-  const campaignRun: SourceCampaignRunResult = await runDueSourceCampaignSteps({
-    tenantId,
-    userId,
-    enrollmentId: sourceCampaignEnrollment.enrollment.id,
-    maxSends: 1,
-    endpoint: "/api/app/leads"
-  });
-  const campaignResult = campaignRun.results[0] ?? null;
+  let campaignRun: SourceCampaignRunResult | null = null;
+  if (dueNow) {
+    if (sendState.attemptedSends > 0 && sendGapMs > 0) {
+      await wait(sendGapMs);
+    }
+    sendState.attemptedSends += 1;
+
+    campaignRun = await runDueSourceCampaignSteps({
+      tenantId,
+      userId,
+      enrollmentId: enrollment.id,
+      maxSends: 1,
+      endpoint: "/api/app/leads"
+    });
+  }
+  const campaignResult = campaignRun?.results[0] ?? null;
   const campaignSent =
     campaignResult?.status === "sent" ||
     campaignResult?.status === "completed" ||
