@@ -239,27 +239,34 @@ async function releaseTenantSyncLease(tenantId: string, leaseId: string) {
 
 export async function runGoogleSheetLeadFlowWithTenantLock(
   input: LeadFlowInput,
-  options: { skipIfRunning?: boolean } = {}
+  options: { skipIfRunning?: boolean; waitForLockMs?: number } = {}
 ): Promise<LeadFlowResult | null> {
   const state = autoSyncState();
-  if (state.runningTenantIds.has(input.tenantId)) {
-    if (options.skipIfRunning) return null;
-    throw new ApiError(409, "LEAD_FLOW_ALREADY_RUNNING", "Lead sheet sync is already running for this company.");
-  }
+  // A manual trigger passes waitForLockMs so a transient collision with the
+  // background scheduler doesn't immediately reject it; the background runs pass
+  // skipIfRunning (waitForLockMs 0) and give up right away.
+  const deadline = Date.now() + Math.max(0, options.waitForLockMs ?? 0);
 
-  state.runningTenantIds.add(input.tenantId);
-  const leaseId = await acquireTenantSyncLease(input.tenantId);
-  if (!leaseId) {
-    state.runningTenantIds.delete(input.tenantId);
-    if (options.skipIfRunning) return null;
-    throw new ApiError(409, "LEAD_FLOW_ALREADY_RUNNING", "Lead sheet sync is already running for this company.");
-  }
+  for (;;) {
+    if (!state.runningTenantIds.has(input.tenantId)) {
+      state.runningTenantIds.add(input.tenantId);
+      const leaseId = await acquireTenantSyncLease(input.tenantId);
+      if (leaseId) {
+        try {
+          return await runGoogleSheetLeadFlow(input);
+        } finally {
+          await releaseTenantSyncLease(input.tenantId, leaseId);
+          state.runningTenantIds.delete(input.tenantId);
+        }
+      }
+      state.runningTenantIds.delete(input.tenantId);
+    }
 
-  try {
-    return await runGoogleSheetLeadFlow(input);
-  } finally {
-    await releaseTenantSyncLease(input.tenantId, leaseId);
-    state.runningTenantIds.delete(input.tenantId);
+    if (Date.now() >= deadline) {
+      if (options.skipIfRunning) return null;
+      throw new ApiError(409, "LEAD_FLOW_ALREADY_RUNNING", "Lead sheet sync is already running for this company.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }
 

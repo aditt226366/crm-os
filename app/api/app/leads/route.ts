@@ -45,11 +45,19 @@ export async function POST(request: NextRequest) {
     const { user } = await requireFeature(request, "LEAD_MANAGEMENT");
     const tenantId = user.tenantId!;
     const body = leadFlowSchema.parse(await request.json().catch(() => ({})));
-    const result = await runGoogleSheetLeadFlowWithTenantLock({
-      tenantId,
-      userId: user.id,
-      maxRows: body.maxRows
-    });
+    // Manual "Import Leads & Send Template": wait briefly if the background
+    // scheduler holds the lock (instead of hard-failing), and force-retry FAILED
+    // leads immediately so a resend after fixing the token isn't blocked by the
+    // background retry cooldown.
+    const result = await runGoogleSheetLeadFlowWithTenantLock(
+      {
+        tenantId,
+        userId: user.id,
+        maxRows: body.maxRows,
+        forceRetryFailed: true
+      },
+      { waitForLockMs: 15000 }
+    );
     invalidateTenantEgressCaches(tenantId);
     const summary = await leadFlowSummary(tenantId);
 

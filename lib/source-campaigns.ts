@@ -269,7 +269,8 @@ export async function enrollImportedLeadInSourceCampaign({
   contactId,
   conversationId,
   sourceSheet,
-  sheetConfig
+  sheetConfig,
+  forceRetry = false
 }: {
   tenantId: string;
   leadId?: string | null;
@@ -277,6 +278,8 @@ export async function enrollImportedLeadInSourceCampaign({
   conversationId?: string | null;
   sourceSheet?: string | null;
   sheetConfig?: SheetCampaignConfig | null;
+  // Ignore the FAILED-retry cooldown (used for an explicit manual "resend").
+  forceRetry?: boolean;
 }) {
   const config = sheetConfig ?? (await loadSheetCampaignConfig(tenantId));
   const sheetCampaign = sheetCampaignForSheet(config, sourceSheet);
@@ -302,7 +305,7 @@ export async function enrollImportedLeadInSourceCampaign({
     const lastAttempt = existing.lastSentAt ?? null;
     const retryFailed =
       existing.status === "FAILED" &&
-      (!lastAttempt || Date.now() - lastAttempt.getTime() >= FAILED_ENROLLMENT_RETRY_MS);
+      (forceRetry || !lastAttempt || Date.now() - lastAttempt.getTime() >= FAILED_ENROLLMENT_RETRY_MS);
     const enrollment = await prisma.automationCampaignEnrollment.update({
       where: { id: existing.id },
       data: {

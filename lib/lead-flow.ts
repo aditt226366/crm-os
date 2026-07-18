@@ -727,7 +727,8 @@ async function processSheetLead({
   sheetCampaignConfig,
   statusColumnCache,
   sendGapMs,
-  sendState
+  sendState,
+  forceRetryFailed
 }: {
   tenantId: string;
   userId: string;
@@ -738,6 +739,7 @@ async function processSheetLead({
   statusColumnCache: Map<string, number | null>;
   sendGapMs: number;
   sendState: { attemptedSends: number };
+  forceRetryFailed: boolean;
 }): Promise<LeadFlowResultEntry> {
   const { contact, conversation } = await upsertLeadConversation({ tenantId, lead: sheetLead });
   const leadRecord = await prisma.lead.findFirst({
@@ -795,7 +797,8 @@ async function processSheetLead({
     contactId: contact.id,
     conversationId: conversation.id,
     sourceSheet: sheetLead.sourceSheet,
-    sheetConfig: sheetCampaignConfig
+    sheetConfig: sheetCampaignConfig,
+    forceRetry: forceRetryFailed
   });
 
   if (!sourceCampaignEnrollment) {
@@ -887,12 +890,16 @@ async function processSheetLead({
 export async function runGoogleSheetLeadFlow({
   tenantId,
   userId,
-  maxRows
+  maxRows,
+  forceRetryFailed = false
 }: {
   tenantId: string;
   userId: string;
   range?: string;
   maxRows?: number;
+  // Set for an explicit manual run so failed leads are retried immediately,
+  // bypassing the FAILED-retry cooldown that only guards the background loop.
+  forceRetryFailed?: boolean;
 }) {
   const integrations = integrationMap(await currentFlowIntegrations(tenantId));
   const sheetsConfig = assertConnected(
@@ -958,7 +965,8 @@ export async function runGoogleSheetLeadFlow({
         sheetCampaignConfig,
         statusColumnCache,
         sendGapMs,
-        sendState
+        sendState,
+        forceRetryFailed
       });
       results.push(result);
     } catch (error) {
