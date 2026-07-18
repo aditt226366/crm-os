@@ -33,6 +33,10 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SEND_GAP_MS = 6000;
 const SOURCE_CAMPAIGN_ADAPTER = "source-based-campaign";
+// A FAILED enrollment (e.g. a rejected template send) is retried on the next
+// import, but at most once per this window so a permanently-failing lead can't
+// re-send on every scheduler tick.
+const FAILED_ENROLLMENT_RETRY_MS = 10 * 60 * 1000;
 
 type CampaignEnrollmentStatus = "ACTIVE" | "COMPLETED" | "STOPPED" | "FAILED";
 export type CampaignDeliveryStatus = "SENDING" | "PENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED";
@@ -291,12 +295,29 @@ export async function enrollImportedLeadInSourceCampaign({
   });
 
   if (existing) {
+    // If the enrollment previously FAILED (most often a rejected template send
+    // whose config has since been corrected), reset it to ACTIVE so the next
+    // run retries the step that failed. Gated by a cooldown so a lead that keeps
+    // failing does not resend on every scheduler tick.
+    const lastAttempt = existing.lastSentAt ?? null;
+    const retryFailed =
+      existing.status === "FAILED" &&
+      (!lastAttempt || Date.now() - lastAttempt.getTime() >= FAILED_ENROLLMENT_RETRY_MS);
     const enrollment = await prisma.automationCampaignEnrollment.update({
       where: { id: existing.id },
       data: {
         leadId: leadId ?? existing.leadId,
         conversationId: conversationId ?? existing.conversationId,
-        sourceSheet: canonicalSourceSheet
+        sourceSheet: canonicalSourceSheet,
+        ...(retryFailed
+          ? {
+              status: "ACTIVE",
+              nextStepNumber: existing.currentStep > 0 ? existing.currentStep : 1,
+              nextSendAt: new Date(),
+              failureReason: null,
+              lastDeliveryStatus: null
+            }
+          : {})
       },
       include: { campaign: true }
     });
