@@ -18,11 +18,6 @@ const nextConfig = {
     // only risks the build. Skip it during `next build`.
     ignoreBuildErrors: true
   },
-  eslint: {
-    // Same rationale: lint runs in our pre-push checks (`npm run lint`); skipping
-    // it during the deploy build avoids another worker thread on a starved host.
-    ignoreDuringBuilds: true
-  },
   experimental: {
     // The deploy build host is thread/process constrained. Next fans static
     // page generation across ~4 workers by default, and each worker spins up a

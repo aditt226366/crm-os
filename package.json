@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:fresh": "npx --yes kill-port 3000 && next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma generate && node scripts/build.mjs",
     "start": "next start -H 0.0.0.0 -p 3000",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
