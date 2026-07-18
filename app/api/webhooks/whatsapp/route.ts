@@ -358,8 +358,29 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  if (mode === "subscribe" && challenge && expected && token === expected) {
-    return new Response(challenge, { status: 200 });
+  if (mode === "subscribe" && challenge) {
+    if (expected && token === expected) {
+      return new Response(challenge, { status: 200 });
+    }
+    // No ?tenant= param and no env token configured: Meta only lets you register
+    // one callback URL per app, so users naturally paste the bare URL. Accept the
+    // handshake if the presented verify token exactly matches ANY connected
+    // company's stored WHATSAPP_VERIFY_TOKEN. This only echoes Meta's challenge
+    // (no tenant-specific action happens here — inbound POSTs resolve their tenant
+    // by phone_number_id), so matching by exact secret is safe.
+    if (!tenantParam && token) {
+      const integrations = await prisma.integration.findMany({
+        where: { type: "WHATSAPP_CLOUD", status: "CONNECTED" },
+        select: { encryptedConfig: true },
+        take: 100
+      });
+      const matches = integrations.some(
+        (integration) => readEncryptedConfig(integration.encryptedConfig).WHATSAPP_VERIFY_TOKEN === token
+      );
+      if (matches) {
+        return new Response(challenge, { status: 200 });
+      }
+    }
   }
 
   return json({ error: { code: "WEBHOOK_VERIFICATION_FAILED", message: "Webhook verification failed" } }, { status: 403 });
