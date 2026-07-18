@@ -75,35 +75,25 @@ function parseModel(value: string): Model {
 }
 
 function serializeModel(model: Model): string {
-  // Store exactly what the user typed — do NOT trim here. This component
-  // re-serializes on every keystroke, so trimming would strip the trailing
-  // space the instant it is typed, making it impossible to type multi-word
-  // names like "UG Leads". The backend trims/normalizes these names when it
-  // parses and matches them (parseSheetCampaignsConfig / sheetCampaignForSheet).
+  // Store exactly what the user typed — do NOT trim or re-parse here. This
+  // component re-serializes on every keystroke, so any normalization (trimming a
+  // trailing space, JSON.parse -> JSON.stringify of the variable mapping) would
+  // rewrite the field mid-edit and eject the cursor, making it impossible to
+  // type values like "UG Leads" or {"customer_name":"lead.name"}. The variable
+  // mapping is kept as the raw string; the backend (parseVariables) parses it
+  // and tolerates NAMED ({"customer_name":"lead.name"}) or NUMBERED
+  // ({"1":"lead.name"}) keys.
   return JSON.stringify({
     combinedSheet: model.combinedSheet,
     sheets: model.sheets.map((sheet) => ({
       sheetName: sheet.sheetName,
-      templates: sheet.templates.map((template) => {
-        let variables: Record<string, string> = {};
-        try {
-          const parsed = template.variables.trim() ? JSON.parse(template.variables) : {};
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            variables = Object.fromEntries(
-              Object.entries(parsed as Record<string, unknown>).map(([key, val]) => [key, String(val ?? "")])
-            );
-          }
-        } catch {
-          variables = {};
-        }
-        return {
-          name: template.name,
-          language: template.language,
-          delayDays: template.delayDays,
-          variableMode: template.variableMode,
-          variables
-        };
-      })
+      templates: sheet.templates.map((template) => ({
+        name: template.name,
+        language: template.language,
+        delayDays: template.delayDays,
+        variableMode: template.variableMode,
+        variables: template.variables
+      }))
     }))
   });
 }

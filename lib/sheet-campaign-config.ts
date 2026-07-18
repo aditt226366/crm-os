@@ -54,7 +54,21 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function parseVariables(raw: unknown): Record<string, string> {
-  const record = asRecord(raw);
+  // Accept either a real object (legacy configs) or a JSON string. The builder
+  // now stores the raw string the user typed (so the input never reformats
+  // mid-edit), e.g. {"customer_name":"lead.name"} for NAMED or {"1":"lead.name"}
+  // for NUMBERED — parse it here.
+  let source: unknown = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return {};
+    try {
+      source = JSON.parse(trimmed);
+    } catch {
+      return {};
+    }
+  }
+  const record = asRecord(source);
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(record)) {
     const trimmedKey = key.trim();
