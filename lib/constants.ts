@@ -25,7 +25,8 @@ export const FEATURE_KEYS = [
   "HUMAN_TAKEOVER",
   "GOOGLE_SHEETS_IMPORT",
   "META_WHATSAPP_INTEGRATION",
-  "AI_AGENTS"
+  "AI_AGENTS",
+  "VOICE_AGENTS"
 ] as const;
 
 export const MANAGED_FEATURE_KEYS = [
@@ -34,8 +35,13 @@ export const MANAGED_FEATURE_KEYS = [
   "CAMPAIGNS",
   "AI_WORKFLOW_BUILDER",
   "LEAD_MANAGEMENT",
-  "INBOX"
+  "INBOX",
+  "VOICE_AGENTS"
 ] as const satisfies readonly FeatureKey[];
+
+// Managed features that are NOT auto-enabled by plan — each company must be
+// opted in explicitly by a platform admin (e.g. paid add-ons like voice calling).
+export const OPT_IN_FEATURE_KEYS = ["VOICE_AGENTS"] as const satisfies readonly FeatureKey[];
 
 const managedFeatureKeySet = new Set<FeatureKey>(MANAGED_FEATURE_KEYS);
 
@@ -151,6 +157,12 @@ export const FEATURE_DEFINITIONS: Record<
     route: "/app/settings/integrations",
     description: "AI providers, agent prompts, and automated response configuration.",
     showInNavigation: false
+  },
+  VOICE_AGENTS: {
+    name: "Voice Agents",
+    navLabel: "Voice Agents",
+    route: "/app/voice-agents",
+    description: "AI voice calling agent — outbound & inbound phone calls, live conversation, recordings, and transcripts."
   }
 };
 
@@ -166,7 +178,8 @@ export const INTEGRATION_TYPES = [
   "WHATSAPP_TEMPLATE_SETTINGS",
   "META_ADS",
   "KNOWLEDGE_BASE",
-  "AI_MODEL"
+  "AI_MODEL",
+  "VOICE_AGENT"
 ] as const;
 
 export const INTEGRATION_DEFINITIONS: Record<
@@ -202,12 +215,20 @@ export const INTEGRATION_DEFINITIONS: Record<
     name: "AI Model for Messaging",
     provider: "ai",
     description: "Connect the AI model used for AI replies, AI workflow builder, lead qualification, and RAG answers."
+  },
+  VOICE_AGENT: {
+    name: "Voice Agent",
+    provider: "plivo",
+    description: "Connect Plivo SIP trunking, Sarvam speech (Saarika STT + Bulbul TTS), and Claude for outbound & inbound AI voice calls."
   }
 };
 
 export function defaultEnabledFeatures(plan: Plan): Set<FeatureKey> {
+  const optIn = new Set<FeatureKey>(OPT_IN_FEATURE_KEYS);
+
   if (plan === "ENTERPRISE" || plan === "PRO") {
-    return new Set(MANAGED_FEATURE_KEYS);
+    // Opt-in add-ons (e.g. Voice Agents) stay off until an admin enables them.
+    return new Set(MANAGED_FEATURE_KEYS.filter((key) => !optIn.has(key)));
   }
 
   return new Set(["INBOX", "LEAD_MANAGEMENT"]);

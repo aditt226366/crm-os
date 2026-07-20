@@ -48,6 +48,7 @@ enum FeatureKey {
   GOOGLE_SHEETS_IMPORT
   META_WHATSAPP_INTEGRATION
   AI_AGENTS
+  VOICE_AGENTS
 }
 
 enum IntegrationType {
@@ -57,6 +58,23 @@ enum IntegrationType {
   META_ADS
   KNOWLEDGE_BASE
   AI_MODEL
+  VOICE_AGENT
+}
+
+enum VoiceCallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum VoiceCallStatus {
+  QUEUED
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  NO_ANSWER
+  BUSY
+  CANCELED
 }
 
 enum IntegrationStatus {
@@ -282,6 +300,7 @@ model Tenant {
   workflowRunSteps            WorkflowRunStep[]
   knowledgeDocuments          KnowledgeDocument[]
   knowledgeChunks             KnowledgeChunk[]
+  voiceCalls                  VoiceCall[]
   whatsAppTemplates           WhatsAppTemplate[]
 }
 
@@ -407,6 +426,7 @@ model Contact {
   broadcastRecipients           BroadcastRecipient[]
   campaignRecipients            CampaignRecipient[]
   sourceAutomationEnrollments   AutomationCampaignEnrollment[]
+  voiceCalls                    VoiceCall[]
 
   @@unique([tenantId, phone])
   @@index([tenantId, waId])
@@ -846,4 +866,33 @@ model WhatsAppTemplate {
 
   @@unique([tenantId, name, language])
   @@index([tenantId, status])
+}
+
+model VoiceCall {
+  id             String             @id @default(cuid())
+  tenantId       String
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  direction      VoiceCallDirection
+  status         VoiceCallStatus    @default(QUEUED)
+  fromNumber     String
+  toNumber       String
+  contactId      String?
+  contact        Contact?           @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  language       String?
+  providerCallId String?
+  recordingUrl   String?
+  durationSec    Int?
+  transcript     Json?
+  summary        String?
+  errorMessage   String?
+  createdById    String?
+  startedAt      DateTime?
+  endedAt        DateTime?
+  metadata       Json?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([providerCallId])
 }

@@ -12,6 +12,7 @@ import {
   LayoutTemplate,
   Megaphone,
   MessageCircle,
+  PhoneCall,
   Save,
   Sheet,
   TestTube2,
@@ -92,7 +93,8 @@ const iconMap = {
   template: LayoutTemplate,
   ads: Megaphone,
   knowledge: FileText,
-  ai: Bot
+  ai: Bot,
+  voice: PhoneCall
 } as const;
 
 function fieldKey(type: IntegrationType, field: string) {

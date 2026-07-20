@@ -137,7 +137,8 @@ BEGIN
     'WHATSAPP_TEMPLATE_SETTINGS',
     'META_ADS',
     'KNOWLEDGE_BASE',
-    'AI_MODEL'
+    'AI_MODEL',
+    'VOICE_AGENT'
   );
 EXCEPTION
   WHEN duplicate_object THEN NULL;
@@ -148,6 +149,7 @@ END $$;`,
   `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'META_ADS';`,
   `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'KNOWLEDGE_BASE';`,
   `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'AI_MODEL';`,
+  `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'VOICE_AGENT';`,
   `DO $$
 BEGIN
   CREATE TYPE public."IntegrationStatus" AS ENUM (

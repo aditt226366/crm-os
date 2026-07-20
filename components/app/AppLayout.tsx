@@ -193,7 +193,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
       "CAMPAIGNS",
       "ADS",
       "AI_WORKFLOW_BUILDER",
-      "LEAD_MANAGEMENT"
+      "LEAD_MANAGEMENT",
+      "VOICE_AGENTS"
     ];
     enabledNavigation.sort((a, b) => ordered.indexOf(a.featureKey) - ordered.indexOf(b.featureKey));
     const settingsNavigation: AppNavigationItem = { featureKey: null, label: "Settings", href: "/app/settings" };

@@ -165,7 +165,7 @@ async function generateAiReply(
   return completion ? { body: completion.text, provider: completion.provider, model: completion.model } : null;
 }
 
-async function loadKnowledgeContext({
+export async function loadKnowledgeContext({
   tenantId,
   config
 }: {

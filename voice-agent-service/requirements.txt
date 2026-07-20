@@ -1,0 +1,9 @@
+# Pin to a recent Pipecat release. The Sarvam (Saarika/Bulbul) and Plivo
+# integrations track the version — if you change this, re-check the imports in
+# bot.py (see README.md).
+pipecat-ai[silero,anthropic,sarvam]>=0.0.60
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+python-dotenv>=1.0
+loguru>=0.7
