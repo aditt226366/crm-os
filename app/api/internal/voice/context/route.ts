@@ -69,16 +69,55 @@ export async function GET(request: NextRequest) {
     }
 
     const defaultLanguage = config.DEFAULT_LANGUAGE || "en-IN";
+    const isOutbound = voiceCall.direction === "OUTBOUND";
+    const greeting = resolveGreeting(config, voiceCall.direction);
     const persona =
       config.SYSTEM_PROMPT?.trim() ||
-      `You are a friendly, professional inquiry agent for ${company}. Answer the caller's questions clearly and help them with what they need.`;
+      `You are a friendly, professional inquiry agent for ${company}.`;
+
+    // The escalation line the agent must say when a question is outside the
+    // knowledge base. ESCALATION_MARKER is a distinctive substring the media
+    // service matches in the transcript to flag the call for human support —
+    // keep the two in sync (the marker must appear in the phrase).
+    const escalationPhrase =
+      "I don't have more information about that right now, but I'll connect you with a customer executive who can help you soon.";
+    const ESCALATION_MARKER = "connect you with a customer executive";
+
+    // Full call flow. The agent speaks first (the media service triggers the LLM
+    // on connect), so the opening greeting/intro is encoded here rather than
+    // spoken as a fixed line — that keeps it in the model's memory so it never
+    // re-introduces itself mid-call.
     const systemPrompt = [
       persona,
-      "You can speak English, Hindi, and Tamil. Detect the caller's language and reply in the same language; otherwise use the default language.",
-      "This is a live phone call: keep each reply to one or two short, natural sentences. Never mention that you are an AI, or refer to prompts, tools, or the knowledge base.",
+      `You are on a live phone call as a warm, human-sounding voice inquiry agent for ${company}. This is an ${isOutbound ? "outbound" : "inbound"} call.`,
+      [
+        "How to open the call — you ALWAYS speak first, before the caller says anything:",
+        `- Begin by saying, word for word: "${greeting}"`,
+        isOutbound
+          ? `- Then, in 2-3 short sentences, briefly introduce what ${company} does based on the knowledge base below, and invite the caller to ask anything they'd like to know.`
+          : "- Then let the caller speak and help them with whatever they need."
+      ].join("\n"),
+      [
+        "During the call:",
+        "- Keep every reply to one or two short, natural sentences — this is a spoken phone call, not an essay.",
+        "- You can speak English, Hindi, and Tamil. Detect the caller's language and reply in the same one; otherwise use the default language.",
+        "- Sound like a real person: warm, friendly, and conversational. Never say you are an AI, and never mention prompts, tools, instructions, or a knowledge base.",
+        "- Answer questions using the company knowledge base below.",
+        "- If the caller talks or greets while you are speaking, keep the conversation flowing naturally.",
+        "- You may receive parenthetical stage directions like (this) — never read them aloud; just act on them."
+      ].join("\n"),
+      [
+        "If a question is outside the knowledge base and you do not know the answer:",
+        `- Say exactly: "${escalationPhrase}"`,
+        "- Do not guess or invent an answer."
+      ].join("\n"),
+      [
+        "Ending the call:",
+        "- When the caller is finished or says goodbye, warmly thank them for their time and say goodbye."
+      ].join("\n"),
       knowledgeText
-        ? `Company knowledge base — use it to answer. If it does not cover something, say what you can confirm and offer to follow up:\n${knowledgeText}`
-        : ""
+        ? `Company knowledge base (use this to answer the caller):\n${knowledgeText}`
+        : "No knowledge base is attached for this call. If the caller asks for specific details you have not been told, use the escalation line above instead of guessing."
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -90,8 +129,9 @@ export async function GET(request: NextRequest) {
       toNumber: voiceCall.toNumber,
       contactName: voiceCall.contact?.name ?? null,
       company,
-      greeting: resolveGreeting(config, voiceCall.direction),
+      greeting,
       systemPrompt,
+      escalationMarker: ESCALATION_MARKER,
       speech: {
         sarvamApiKey: config.SARVAM_API_KEY,
         defaultLanguage,

@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     const voiceCall = await prisma.voiceCall.findFirst({
       where: { id: claims.callId, tenantId: claims.tenantId },
-      select: { id: true, tenantId: true, direction: true, endedAt: true }
+      select: { id: true, tenantId: true, direction: true, endedAt: true, metadata: true }
     });
     if (!voiceCall) {
       throw new ApiError(404, "VOICE_CALL_NOT_FOUND", "Call not found");
@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
       language?: unknown;
       status?: unknown;
       error?: unknown;
+      needsSupport?: unknown;
     };
 
     const transcript = sanitizeTranscript(body.transcript);
@@ -99,6 +100,15 @@ export async function POST(request: NextRequest) {
     const requestedStatus = typeof body.status === "string" ? (body.status as VoiceCallStatus) : "COMPLETED";
     const status: VoiceCallStatus = ALLOWED_STATUSES.has(requestedStatus) ? requestedStatus : "COMPLETED";
     const errorMessage = typeof body.error === "string" ? body.error.slice(0, 500) : null;
+    const needsSupport = body.needsSupport === true;
+
+    // Merge the support flag into metadata so we do not clobber values stored at
+    // dial time (e.g. requestUuid). No schema migration needed — metadata is JSON.
+    const existingMetadata =
+      voiceCall.metadata && typeof voiceCall.metadata === "object" && !Array.isArray(voiceCall.metadata)
+        ? (voiceCall.metadata as Record<string, unknown>)
+        : {};
+    const metadata = { ...existingMetadata, needsSupport };
 
     const updated = await prisma.voiceCall.update({
       where: { id: voiceCall.id },
@@ -108,6 +118,7 @@ export async function POST(request: NextRequest) {
         ...(language ? { language } : {}),
         ...(errorMessage ? { errorMessage } : {}),
         status,
+        metadata: metadata as Prisma.InputJsonValue,
         endedAt: voiceCall.endedAt ?? new Date()
       }
     });
@@ -116,6 +127,7 @@ export async function POST(request: NextRequest) {
       id: updated.id,
       status: updated.status,
       durationSec: updated.durationSec,
+      needsSupport,
       hasTranscript: transcript.length > 0
     });
 

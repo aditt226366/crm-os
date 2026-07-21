@@ -7,6 +7,7 @@ import {
   FileText,
   Globe,
   Languages,
+  LifeBuoy,
   Mic,
   Phone,
   PhoneCall,
@@ -41,6 +42,7 @@ type CallSummary = {
   hasRecording: boolean;
   recordingUrl: string | null;
   summary: string | null;
+  needsSupport: boolean;
   errorMessage: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -335,6 +337,7 @@ function VoiceAgentsInner() {
                       <Clock3 className="h-3.5 w-3.5" />
                       {formatDuration(call.durationSec)}
                     </span>
+                    {call.needsSupport ? <SupportBadge /> : null}
                     <StatusBadge value={call.status} />
                   </button>
                 </li>
@@ -613,6 +616,15 @@ function KnowledgeBaseCard({
   );
 }
 
+function SupportBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-100">
+      <LifeBuoy className="h-3 w-3" />
+      Support
+    </span>
+  );
+}
+
 function InfoTile({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
@@ -696,8 +708,19 @@ function CallDetailDrawer({ callId, onClose }: { callId: string; onClose: () => 
               <StatusBadge value={call.status} />
               <StatusBadge value={call.direction} />
               {call.language ? <StatusBadge value={call.language} /> : null}
+              {call.needsSupport ? <SupportBadge /> : null}
               <span className="text-xs text-slate-400">{formatDuration(call.durationSec)}</span>
             </div>
+
+            {call.needsSupport ? (
+              <div className="flex items-start gap-2 rounded-2xl border border-amber-300/25 bg-amber-300/[0.07] p-3">
+                <LifeBuoy className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" />
+                <p className="text-xs text-amber-100">
+                  The caller asked something outside the knowledge base. The agent offered to connect them with a customer
+                  executive — follow up with this caller.
+                </p>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-2 gap-3 text-xs">
               <InfoTile icon={<PhoneOutgoing className="h-3.5 w-3.5" />} label="From" value={call.fromNumber} />

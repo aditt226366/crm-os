@@ -170,6 +170,7 @@ type SerializableVoiceCall = {
   summary: string | null;
   errorMessage?: string | null;
   transcript?: unknown;
+  metadata?: unknown;
   createdAt: Date;
   startedAt: Date | null;
   endedAt: Date | null;
@@ -177,6 +178,10 @@ type SerializableVoiceCall = {
 };
 
 export function serializeVoiceCall(call: SerializableVoiceCall, options?: { includeTranscript?: boolean }) {
+  const metadata =
+    call.metadata && typeof call.metadata === "object" && !Array.isArray(call.metadata)
+      ? (call.metadata as Record<string, unknown>)
+      : {};
   return {
     id: call.id,
     direction: call.direction,
@@ -189,6 +194,7 @@ export function serializeVoiceCall(call: SerializableVoiceCall, options?: { incl
     hasRecording: Boolean(call.recordingUrl),
     recordingUrl: call.recordingUrl ?? null,
     summary: call.summary,
+    needsSupport: metadata.needsSupport === true,
     errorMessage: call.errorMessage ?? null,
     ...(options?.includeTranscript
       ? { transcript: Array.isArray(call.transcript) ? call.transcript : [] }
