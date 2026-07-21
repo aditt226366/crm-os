@@ -23,7 +23,11 @@ export function voiceServiceWsUrl() {
 }
 
 export function appBaseUrl(origin?: string) {
-  return (origin || process.env.APP_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+  // Prefer the configured public URL. Behind a proxy (Fly/Render/etc.) the
+  // request origin is often the internal address (http://localhost:3000), which
+  // Plivo cannot reach — so the answer/hangup callback URLs must come from
+  // APP_URL, falling back to the request origin only when APP_URL is unset.
+  return (process.env.APP_URL?.trim() || origin || "http://127.0.0.1:3000").replace(/\/$/, "");
 }
 
 export async function signCallToken(payload: CallTokenPayload) {

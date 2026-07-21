@@ -276,57 +276,10 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         group: "LLM (Claude)",
         defaultValue: "claude-sonnet-4-6",
         placeholder: "claude-sonnet-4-6"
-      },
-      {
-        name: "COMPANY_DISPLAY_NAME",
-        label: "Company name",
-        input: "text",
-        required: true,
-        group: "Agent Persona",
-        helpText: "Spoken in the greeting, e.g. \"I'm the inquiry assistant from {company}\"."
-      },
-      {
-        name: "OUTBOUND_GREETING",
-        label: "Outbound greeting",
-        input: "textarea",
-        group: "Agent Persona",
-        defaultValue:
-          "Hi, I'm the inquiry assistant from {{company}}. Do you have two minutes to talk?",
-        helpText: "Spoken first on outbound calls. Use {{company}} for the company name."
-      },
-      {
-        name: "INBOUND_GREETING",
-        label: "Inbound greeting",
-        input: "textarea",
-        group: "Agent Persona",
-        defaultValue: "Hello, welcome to {{company}}. How may I help you?",
-        helpText: "Spoken first when a customer calls in. Use {{company}} for the company name."
-      },
-      {
-        name: "SYSTEM_PROMPT",
-        label: "Agent instructions",
-        input: "textarea",
-        group: "Agent Persona",
-        placeholder:
-          "You are a friendly inquiry agent. Answer questions using the company knowledge base. Keep replies short and conversational.",
-        helpText: "Persona and behaviour for the inquiry agent. The knowledge base is appended automatically."
-      },
-      {
-        name: "MAX_CALL_SECONDS",
-        label: "Max call length (seconds)",
-        input: "text",
-        group: "Agent Persona",
-        defaultValue: "300"
-      },
-      {
-        name: "USE_KNOWLEDGE_BASE",
-        label: "Use knowledge base",
-        input: "select",
-        group: "Agent Persona",
-        options: ["Yes", "No"],
-        defaultValue: "Yes",
-        helpText: "When Yes, the company Knowledge Base is injected so the agent answers from it."
       }
+      // Agent persona (company name, greetings, instructions, KB toggle, max
+      // duration) is edited by the company user in the Voice Agents dashboard,
+      // not here — see app/api/app/voice-agents/settings + knowledge routes.
     ]
   }
 };

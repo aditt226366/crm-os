@@ -4,18 +4,23 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   Clock3,
+  FileText,
+  Globe,
   Languages,
   Mic,
   Phone,
   PhoneCall,
   PhoneIncoming,
   PhoneOutgoing,
+  Plus,
   RefreshCw,
-  Sparkles,
+  Save,
+  SlidersHorizontal,
+  Trash2,
+  Upload,
   User,
   X
 } from "lucide-react";
-import Link from "next/link";
 import { FeatureGuard } from "@/components/app/FeatureGuard";
 import { PageHeader } from "@/components/app/PageHeader";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -53,6 +58,10 @@ type DashboardData = {
     status: string;
     virtualNumber: string | null;
     companyName: string | null;
+    outboundGreeting: string;
+    inboundGreeting: string;
+    systemPrompt: string;
+    maxCallSeconds: number;
     defaultLanguage: string;
     ttsVoice: string;
     useKnowledgeBase: boolean;
@@ -281,6 +290,9 @@ function VoiceAgentsInner() {
         <MetricTile label="Outbound" value={metrics.outbound} />
       </div>
 
+      {/* Agent settings (edited by the company user) */}
+      <AgentSettingsCard agent={agent} onSaved={() => void refresh()} />
+
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Call history */}
         <GlassCard className="p-0 lg:col-span-2">
@@ -332,42 +344,272 @@ function VoiceAgentsInner() {
         </GlassCard>
 
         {/* Knowledge base */}
-        <GlassCard className="p-5">
-          <div className="flex items-center gap-2">
-            <BookOpen className="h-4 w-4 text-cyan-100" />
-            <p className="text-sm font-semibold text-white">Knowledge base</p>
-          </div>
-          <p className="mt-1 text-xs text-slate-400">
-            {agent.useKnowledgeBase
-              ? "The agent answers questions using these documents."
-              : "Knowledge base is turned off for the voice agent."}
-          </p>
-          <ul className="mt-3 space-y-2">
-            {data!.knowledgeDocuments.length === 0 ? (
-              <li className="text-xs text-slate-500">No documents attached yet.</li>
-            ) : (
-              data!.knowledgeDocuments.map((doc) => (
-                <li
-                  key={doc.id}
-                  className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"
-                >
-                  <span className="min-w-0 truncate text-xs text-slate-200">{doc.title}</span>
-                  <StatusBadge value={doc.status} className="ml-2 shrink-0" />
-                </li>
-              ))
-            )}
-          </ul>
-          <Link href="/app/knowledge-base" className="mt-4 inline-flex">
-            <NeonButton variant="secondary">
-              <Sparkles className="h-4 w-4" />
-              Manage knowledge base
-            </NeonButton>
-          </Link>
-        </GlassCard>
+        <KnowledgeBaseCard
+          documents={data!.knowledgeDocuments}
+          useKnowledgeBase={agent.useKnowledgeBase}
+          onChanged={() => void refresh()}
+        />
       </div>
 
       {selectedId ? <CallDetailDrawer key={selectedId} callId={selectedId} onClose={() => setSelectedId(null)} /> : null}
     </div>
+  );
+}
+
+const FIELD_CLASS =
+  "mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-cyan-300/40 focus:outline-none";
+
+function AgentSettingsCard({ agent, onSaved }: { agent: DashboardData["agent"]; onSaved: () => void }) {
+  const [companyName, setCompanyName] = useState(agent.companyName ?? "");
+  const [outboundGreeting, setOutboundGreeting] = useState(agent.outboundGreeting);
+  const [inboundGreeting, setInboundGreeting] = useState(agent.inboundGreeting);
+  const [systemPrompt, setSystemPrompt] = useState(agent.systemPrompt);
+  const [maxCallSeconds, setMaxCallSeconds] = useState(String(agent.maxCallSeconds || 300));
+  const [useKb, setUseKb] = useState(agent.useKnowledgeBase);
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    setNote(null);
+    setError(null);
+    try {
+      const response = await fetch("/api/app/voice-agents/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          companyName,
+          outboundGreeting,
+          inboundGreeting,
+          systemPrompt,
+          maxCallSeconds: Number(maxCallSeconds) || 300,
+          useKnowledgeBase: useKb
+        })
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+      if (!response.ok) throw new Error(payload?.error?.message ?? "Could not save settings.");
+      setNote("Saved.");
+      onSaved();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save settings.");
+    } finally {
+      setSaving(false);
+    }
+  }, [companyName, inboundGreeting, maxCallSeconds, onSaved, outboundGreeting, systemPrompt, useKb]);
+
+  return (
+    <GlassCard className="p-5">
+      <div className="flex items-center gap-2">
+        <SlidersHorizontal className="h-4 w-4 text-cyan-100" />
+        <p className="text-sm font-semibold text-white">Agent settings</p>
+      </div>
+      <p className="mt-1 text-xs text-slate-400">
+        Edit how your agent introduces itself and behaves. Use <code className="text-cyan-100">{"{{company}}"}</code> in the
+        greetings for your company name.
+      </p>
+
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <label className="block text-xs text-slate-400">
+          Company name
+          <input className={FIELD_CLASS} value={companyName} onChange={(event) => setCompanyName(event.target.value)} />
+        </label>
+        <label className="block text-xs text-slate-400">
+          Max call length (seconds)
+          <input
+            className={FIELD_CLASS}
+            inputMode="numeric"
+            value={maxCallSeconds}
+            onChange={(event) => setMaxCallSeconds(event.target.value.replace(/[^\d]/g, ""))}
+          />
+        </label>
+        <label className="block text-xs text-slate-400">
+          Outbound greeting
+          <textarea
+            className={cn(FIELD_CLASS, "min-h-16 resize-y")}
+            value={outboundGreeting}
+            onChange={(event) => setOutboundGreeting(event.target.value)}
+          />
+        </label>
+        <label className="block text-xs text-slate-400">
+          Inbound greeting
+          <textarea
+            className={cn(FIELD_CLASS, "min-h-16 resize-y")}
+            value={inboundGreeting}
+            onChange={(event) => setInboundGreeting(event.target.value)}
+          />
+        </label>
+      </div>
+
+      <label className="mt-4 block text-xs text-slate-400">
+        Agent instructions
+        <textarea
+          className={cn(FIELD_CLASS, "min-h-20 resize-y")}
+          value={systemPrompt}
+          onChange={(event) => setSystemPrompt(event.target.value)}
+          placeholder="You are a friendly inquiry agent. Answer using the knowledge base. Keep replies short and conversational."
+        />
+      </label>
+
+      <label className="mt-3 flex items-center gap-2 text-xs text-slate-300">
+        <input type="checkbox" checked={useKb} onChange={(event) => setUseKb(event.target.checked)} className="h-4 w-4 accent-cyan-300" />
+        Use the knowledge base to answer questions
+      </label>
+
+      <div className="mt-4 flex items-center gap-3">
+        <NeonButton onClick={() => void save()} loading={saving}>
+          <Save className="h-4 w-4" />
+          Save settings
+        </NeonButton>
+        {note ? <span className="text-xs text-emerald-200">{note}</span> : null}
+        {error ? <span className="text-xs text-rose-200">{error}</span> : null}
+      </div>
+    </GlassCard>
+  );
+}
+
+function KnowledgeBaseCard({
+  documents,
+  useKnowledgeBase,
+  onChanged
+}: {
+  documents: KnowledgeDoc[];
+  useKnowledgeBase: boolean;
+  onChanged: () => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState<"url" | "pdf" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const post = useCallback(
+    async (form: FormData, kind: "url" | "pdf", successMsg: string) => {
+      setBusy(kind);
+      setNote(null);
+      setError(null);
+      try {
+        const response = await fetch("/api/app/voice-agents/knowledge", { method: "POST", credentials: "include", body: form });
+        const payload = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+        if (!response.ok) throw new Error(payload?.error?.message ?? "Could not attach.");
+        setNote(successMsg);
+        onChanged();
+      } catch (attachError) {
+        setError(attachError instanceof Error ? attachError.message : "Could not attach.");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onChanged]
+  );
+
+  const addUrl = useCallback(() => {
+    if (!url.trim()) return;
+    const form = new FormData();
+    form.append("url", url.trim());
+    void post(form, "url", "Website added.").then(() => setUrl(""));
+  }, [post, url]);
+
+  const uploadPdf = useCallback(
+    (file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      void post(form, "pdf", "PDF added.");
+    },
+    [post]
+  );
+
+  const remove = useCallback(
+    async (id: string) => {
+      try {
+        const response = await fetch(`/api/app/voice-agents/knowledge/${id}`, { method: "DELETE", credentials: "include" });
+        if (response.ok) onChanged();
+      } catch {
+        // ignore — the list will refresh on next poll
+      }
+    },
+    [onChanged]
+  );
+
+  return (
+    <GlassCard className="p-5">
+      <div className="flex items-center gap-2">
+        <BookOpen className="h-4 w-4 text-cyan-100" />
+        <p className="text-sm font-semibold text-white">Knowledge base</p>
+      </div>
+      <p className="mt-1 text-xs text-slate-400">
+        {useKnowledgeBase
+          ? "Attach a website or PDF — the agent answers questions from these."
+          : "Knowledge base is turned off in Agent settings."}
+      </p>
+
+      {/* Website */}
+      <div className="mt-3 flex gap-2">
+        <div className="relative flex-1">
+          <Globe className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+          <input
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="https://company.com"
+            className="min-h-10 w-full rounded-2xl border border-white/10 bg-white/[0.04] pl-9 pr-3 text-sm text-white placeholder:text-slate-500 focus:border-cyan-300/40 focus:outline-none"
+          />
+        </div>
+        <NeonButton onClick={addUrl} loading={busy === "url"} disabled={!url.trim()}>
+          <Plus className="h-4 w-4" />
+          Add
+        </NeonButton>
+      </div>
+
+      {/* PDF */}
+      <label className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-300/40 hover:text-white">
+        {busy === "pdf" ? <Upload className="h-4 w-4 animate-pulse" /> : <FileText className="h-4 w-4" />}
+        {busy === "pdf" ? "Reading PDF…" : "Upload a PDF"}
+        <input
+          type="file"
+          accept="application/pdf,.pdf"
+          className="hidden"
+          disabled={busy !== null}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) uploadPdf(file);
+            event.target.value = "";
+          }}
+        />
+      </label>
+
+      {note ? <p className="mt-2 text-xs text-emerald-200">{note}</p> : null}
+      {error ? <p className="mt-2 text-xs text-rose-200">{error}</p> : null}
+
+      <ul className="mt-3 space-y-2">
+        {documents.length === 0 ? (
+          <li className="text-xs text-slate-500">No documents attached yet.</li>
+        ) : (
+          documents.map((doc) => (
+            <li
+              key={doc.id}
+              className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                {doc.type === "URL" ? (
+                  <Globe className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                ) : (
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                )}
+                <span className="min-w-0 truncate text-xs text-slate-200">{doc.title}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => void remove(doc.id)}
+                className="shrink-0 text-slate-500 transition hover:text-rose-300"
+                aria-label="Remove document"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+    </GlassCard>
   );
 }
 

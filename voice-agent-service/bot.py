@@ -84,11 +84,19 @@ async def run_bot(websocket, token: str, app_url: str, stream_id: str, call_id: 
         model=STT_MODEL,
         params=SarvamSTTService.InputParams(language_code=default_language),
     )
+    # Humanization: a slightly slower pace + preprocessing (normalizes numbers,
+    # dates, and mixed English/Hindi/Tamil text) makes Bulbul sound noticeably
+    # more natural and less robotic. Adjust pace (0.8-1.0) / pitch to taste.
     tts = SarvamTTSService(
         api_key=speech["sarvamApiKey"],
         voice_id=speech.get("ttsVoice", "anushka"),
         model=TTS_MODEL,
-        params=SarvamTTSService.InputParams(target_language_code=default_language),
+        params=SarvamTTSService.InputParams(
+            target_language_code=default_language,
+            pace=0.95,
+            pitch=0.0,
+            enable_preprocessing=True,
+        ),
     )
     llm = AnthropicLLMService(api_key=llm_cfg["anthropicApiKey"], model=llm_cfg.get("model", "claude-sonnet-4-6"))
 

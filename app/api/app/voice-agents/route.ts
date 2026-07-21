@@ -44,7 +44,11 @@ export async function GET(request: NextRequest) {
         status: voice?.status ?? "NOT_CONNECTED",
         // Non-secret display fields only.
         virtualNumber: config?.PLIVO_PHONE_NUMBER ?? null,
-        companyName: config?.COMPANY_DISPLAY_NAME ?? user.tenant?.name ?? null,
+        companyName: config?.COMPANY_DISPLAY_NAME ?? user.tenant?.name ?? "",
+        outboundGreeting: config?.OUTBOUND_GREETING ?? "",
+        inboundGreeting: config?.INBOUND_GREETING ?? "",
+        systemPrompt: config?.SYSTEM_PROMPT ?? "",
+        maxCallSeconds: Number(config?.MAX_CALL_SECONDS ?? 300) || 300,
         defaultLanguage: config?.DEFAULT_LANGUAGE ?? "en-IN",
         ttsVoice: config?.TTS_VOICE ?? "anushka",
         useKnowledgeBase: (config?.USE_KNOWLEDGE_BASE ?? "Yes").toLowerCase() !== "no",
