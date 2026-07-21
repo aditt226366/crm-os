@@ -124,10 +124,11 @@ async def run_bot(websocket, token: str, app_url: str, stream_id: str, call_id: 
         ),
     )
 
+    # Saarika auto-detects the spoken language (its InputParams field is `language`,
+    # a Language enum, not a code) — leave it to auto-detect for robustness.
     stt = SarvamSTTService(
         api_key=speech["sarvamApiKey"],
         model=STT_MODEL,
-        params=SarvamSTTService.InputParams(language_code=default_language),
     )
     # Humanization: a slightly slower pace + preprocessing (normalizes numbers,
     # dates, mixed English/Hindi/Tamil) makes Bulbul sound more natural.
@@ -136,7 +137,6 @@ async def run_bot(websocket, token: str, app_url: str, stream_id: str, call_id: 
         voice_id=speech.get("ttsVoice", "anushka"),
         model=TTS_MODEL,
         params=SarvamTTSService.InputParams(
-            target_language_code=default_language,
             pace=0.95,
             pitch=0.0,
             enable_preprocessing=True,
