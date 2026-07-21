@@ -185,17 +185,13 @@ export async function loadKnowledgeContext({
       orderBy: { updatedAt: "desc" },
       take: 6
     }),
+    // Do NOT join the `document` relation here: an orphaned chunk (parent doc
+    // missing) makes Prisma throw "Field document is required to return data,
+    // got null", which would 500 the whole request. Content alone is enough.
     prisma.knowledgeChunk.findMany({
       where: { tenantId },
       select: {
-        content: true,
-        document: {
-          select: {
-            title: true,
-            type: true,
-            status: true
-          }
-        }
+        content: true
       },
       orderBy: { createdAt: "desc" },
       take: topK
@@ -217,7 +213,7 @@ export async function loadKnowledgeContext({
   for (const chunk of chunks) {
     const content = chunk.content.replace(/\s+/g, " ").trim();
     if (!content) continue;
-    lines.push(`${chunk.document.title}: ${content}`);
+    lines.push(content);
   }
 
   return lines.join("\n").slice(0, 6000);

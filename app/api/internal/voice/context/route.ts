@@ -49,13 +49,23 @@ export async function GET(request: NextRequest) {
 
     let knowledgeText = "";
     if ((config.USE_KNOWLEDGE_BASE || "Yes").toLowerCase() !== "no") {
-      const knowledgeIntegration = await prisma.integration.findUnique({
-        where: { tenantId_type: { tenantId: claims.tenantId, type: "KNOWLEDGE_BASE" } },
-        select: { status: true, encryptedConfig: true }
-      });
-      const knowledgeConfig =
-        knowledgeIntegration?.status === "CONNECTED" ? readEncryptedConfig(knowledgeIntegration.encryptedConfig) : {};
-      knowledgeText = await loadKnowledgeContext({ tenantId: claims.tenantId, config: knowledgeConfig });
+      // The knowledge base is optional for a call — never let a KB/DB issue
+      // fail the context fetch (which would silently drop the call).
+      try {
+        const knowledgeIntegration = await prisma.integration.findUnique({
+          where: { tenantId_type: { tenantId: claims.tenantId, type: "KNOWLEDGE_BASE" } },
+          select: { status: true, encryptedConfig: true }
+        });
+        const knowledgeConfig =
+          knowledgeIntegration?.status === "CONNECTED" ? readEncryptedConfig(knowledgeIntegration.encryptedConfig) : {};
+        knowledgeText = await loadKnowledgeContext({ tenantId: claims.tenantId, config: knowledgeConfig });
+      } catch (kbError) {
+        console.error(
+          "[voice.context] knowledge base load failed; continuing without it",
+          kbError instanceof Error ? kbError.message : String(kbError)
+        );
+        knowledgeText = "";
+      }
     }
 
     const defaultLanguage = config.DEFAULT_LANGUAGE || "en-IN";
