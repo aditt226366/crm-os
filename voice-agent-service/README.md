@@ -1,80 +1,108 @@
-# Voice Agent media service (Pipecat)
+# Voice Agent worker (LiveKit Agents)
 
-Standalone, always-on media plane for the CRM's Voice Agents feature. It runs the
-real-time audio loop for one phone call:
+Real-time media plane for the CRM's Voice Agents feature. **LiveKit Cloud** runs
+the SIP bridging, audio transport, and turn detection; this worker just joins each
+call's room and runs the AI pipeline for one phone call:
 
 ```
-Plivo audio (8kHz, wss) ─► Saarika STT (Sarvam) ─► Claude Sonnet 4.6 ─► Bulbul TTS (Sarvam) ─► Plivo audio
-                            with Silero VAD + interruptions
+Plivo number ──SIP──► LiveKit Cloud ──► this worker:
+                                         Saarika STT (Sarvam) ─► Claude (Anthropic) ─► Bulbul TTS (Sarvam)
+                                         turn-taking handled by LiveKit
 ```
 
-The Next.js CRM app is the control plane: it owns credentials, the database, and
-all Plivo REST calls, and it hands this service everything it needs per call via
-a short-lived signed token. This service holds **no long-lived secrets** — it
-only relays that token back to the control plane as a bearer credential.
+The Next.js CRM is the control plane: it owns credentials, the database, and the
+per-company config. This worker holds **no long-lived tenant secrets** — it
+fetches per-call context (keys, greeting, system prompt with the embedded
+knowledge base) from the CRM using a short-lived signed token, and posts the
+transcript back when the call ends.
 
 ## How a call flows
 
-1. Plivo answers a call and hits the CRM's `/api/webhooks/plivo/answer`, which
-   returns Plivo XML opening a bidirectional audio stream to `wss://<this>/ws?token=<jwt>`.
-2. `server.py` accepts the websocket, reads `?token=`, and calls the CRM's
-   `GET /api/internal/voice/context` (bearer = token) to fetch the Sarvam +
-   Anthropic keys, the greeting, the composed system prompt (already including
-   the company knowledge base), and call metadata.
-3. It reads Plivo's stream `start` frames (streamId / callId) and runs the
-   Pipecat pipeline in `bot.py`. The agent greets first, then converses.
-4. On hangup it POSTs the transcript to `POST /api/internal/voice/complete`
-   (bearer = token). The CRM saves it and generates a summary.
+**Outbound** — user clicks *Call* in the dashboard → CRM creates the `VoiceCall`
+row → `lib/livekit-voice.ts` dispatches this agent into a room `voice-<callId>`
+(metadata carries the token) and dials the customer into that room via the Plivo
+**outbound** SIP trunk → the worker fetches `/api/internal/voice/context` with the
+token, greets, and converses turn-by-turn → on hangup it POSTs the transcript to
+`/api/internal/voice/complete`.
+
+**Inbound** — caller dials the Plivo number → Plivo **origination** routes the
+call over SIP to LiveKit → LiveKit's dispatch rule creates a room and dispatches
+this agent → the worker reads the dialed/caller numbers from the SIP participant
+attributes, calls `/api/internal/voice/inbound-start` (shared-secret auth) to
+resolve the tenant + create the row (returns `callId` + token), then follows the
+same context → greet → converse → complete path.
+
+## One-time setup
+
+### 1. LiveKit Cloud
+Create a project at cloud.livekit.io. From **Settings → Keys** copy the project
+URL (`wss://<project>.livekit.cloud`), API key, and API secret. Enable **India
+region pinning** for lower latency to Indian callers.
+
+### 2. Plivo SIP trunk (your existing number stays)
+Follow the official guide: https://docs.livekit.io/sip/quickstarts/configuring-plivo-trunk/
+- **Inbound:** create a Plivo origination URI pointing at your LiveKit SIP host
+  (`sip:<project>.sip.livekit.cloud;transport=tcp`), create a Plivo inbound trunk
+  with it, and attach your existing phone number.
+- **Outbound:** create Plivo termination credentials (username/password), note the
+  termination SIP domain (e.g. `xxxx.zt.plivo.com`).
+
+### 3. LiveKit trunks + dispatch rule (via the `lk` CLI or dashboard)
+- **Inbound trunk** (accepts calls from Plivo) + a **dispatch rule** that
+  dispatches agent `voice-inquiry-agent` and creates a room per call.
+- **Outbound trunk** (Plivo termination domain + credentials). Copy its
+  `ST_...` id → this is `LIVEKIT_SIP_OUTBOUND_TRUNK_ID`.
+
+### 4. Configure a LiveKit webhook → the CRM
+In LiveKit project settings, add a webhook pointing at
+`https://<crm-host>/api/webhooks/livekit` (it verifies the LiveKit signature).
+
+### 5. Secrets
+On the **CRM** app: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+`LIVEKIT_SIP_OUTBOUND_TRUNK_ID`, and (already set) `VOICE_SERVICE_SECRET`.
+On the **worker**: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+`APP_URL` (the CRM), `VOICE_SERVICE_SECRET` (same value as the CRM). Per-tenant
+Sarvam/Claude keys are **not** set here — they come from `/context` per call.
 
 ## Run locally
 
 ```bash
 cd voice-agent-service
-cp .env.example .env          # set APP_URL to your running CRM (or its tunnel)
-python -m venv .venv && source .venv/bin/activate   # (Windows: .venv\Scripts\activate)
+cp .env.example .env          # fill LIVEKIT_* + APP_URL + VOICE_SERVICE_SECRET
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python server.py              # listens on :8080
+python agent.py download-files   # cache the Silero VAD model
+python agent.py dev              # connect to LiveKit Cloud and wait for calls
 ```
 
-Expose it publicly so Plivo can reach it (e.g. `ngrok http 8080`) and set
-`VOICE_SERVICE_WS_URL` in the CRM's env to the resulting `wss://…` host. Point
-your Plivo Application's Answer URL at `https://<crm-host>/api/webhooks/plivo/answer`
-and its Hangup URL at `https://<crm-host>/api/webhooks/plivo/status`.
+The worker dials **out** to LiveKit Cloud, so there is no port to expose. Place a
+test call from the CRM dashboard; the agent joins the room and greets.
 
-## Deploy
-
-Build the container and run it as a second always-on service next to the CRM:
+## Deploy (Fly)
 
 ```bash
-docker build -t voice-agent-service .
-docker run -p 8080:8080 --env APP_URL=https://<crm-host> voice-agent-service
+cd voice-agent-service
+fly deploy                       # app finalcrm-os-voice (see fly.toml)
 ```
 
-It must be reachable over `wss://` (Plivo requires TLS for streaming in
-production). Set `VOICE_SERVICE_WS_URL=wss://<this-host>` in the CRM.
+No `[http_service]` — it is a worker, not a server. Keep one machine running so it
+stays registered with LiveKit Cloud and ready to take calls.
 
 ## Environment
 
 | Var | Purpose |
 | --- | --- |
+| `LIVEKIT_URL` | LiveKit Cloud project URL (`wss://…`). The worker dials out to it. |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit project credentials. |
 | `APP_URL` | Base URL of the CRM control plane. |
-| `PORT` | Listen port (default 8080). |
-| `SARVAM_STT_MODEL` / `SARVAM_TTS_MODEL` | Optional model overrides. |
+| `VOICE_SERVICE_SECRET` | Shared secret for `inbound-start` auth (must match the CRM). |
+| `VOICE_AGENT_NAME` | Agent name; must match the CRM dispatch + LiveKit inbound rule (default `voice-inquiry-agent`). |
+| `SARVAM_STT_MODEL` / `SARVAM_TTS_MODEL` | Optional model overrides (default `saarika:v2.5` / `bulbul:v2`). |
 
 ## Version note
 
-`bot.py` targets a recent `pipecat-ai` release. The Sarvam (`SarvamSTTService`,
-`SarvamTTSService`) and Plivo (`PlivoFrameSerializer`) integrations occasionally
-change import paths or constructor params between versions. If you pin a
-different version and see an ImportError or TypeError at startup, adjust the
-imports/params in the "Pipecat services" block of `bot.py` to match your
-installed version. If a build lacks a Sarvam service, implement a thin
-`STTService` / `TTSService` subclass against Sarvam's streaming Saarika/Bulbul
-APIs and swap it in.
-
-## Latency
-
-Target is ~400 ms voice-to-voice. It is reached only with full streaming at every
-stage plus regional colocation (Plivo India + Sarvam India + this service in the
-same region). Realistic cloud STT→LLM→TTS is ~400–800 ms — treat 400 ms as a
-tuning target, not a guarantee.
+`agent.py` was written and verified against **livekit-agents 1.6.x** and the
+matching `livekit-plugins-sarvam` / `-anthropic` / `-silero`. If you bump the pin
+in `requirements.txt`, re-check the `AgentSession` / `session.say` / `session.start`
+signatures and the `sarvam.STT` / `sarvam.TTS` / `anthropic.LLM` constructors —
+they occasionally change between minor versions.

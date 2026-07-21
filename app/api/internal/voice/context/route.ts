@@ -138,7 +138,10 @@ export async function GET(request: NextRequest) {
       speech: {
         sarvamApiKey: config.SARVAM_API_KEY,
         defaultLanguage,
-        ttsVoice: config.TTS_VOICE || "anushka"
+        // Sarvam Bulbul TTS hints the LiveKit worker passes to the plugin.
+        ttsLanguage: defaultLanguage,
+        speaker: config.TTS_VOICE || "anushka",
+        ttsModel: config.TTS_MODEL || "bulbul:v2"
       },
       llm: {
         anthropicApiKey: config.ANTHROPIC_API_KEY,

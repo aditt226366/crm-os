@@ -5,8 +5,9 @@ import { requireFeature } from "@/lib/guards";
 import { ensureIntegrationSchema } from "@/lib/integration-schema";
 import { recordUsage } from "@/lib/usage";
 import { emitTenantEvent } from "@/lib/realtime";
-import { makeOutboundCall, normalizePlivoNumber } from "@/lib/plivo-voice";
-import { appBaseUrl, loadVoiceAgentConfig, serializeVoiceCall } from "@/lib/voice-agent";
+import { normalizePlivoNumber } from "@/lib/plivo-voice";
+import { loadVoiceAgentConfig, maxCallSeconds, serializeVoiceCall, signCallToken } from "@/lib/voice-agent";
+import { placeOutboundCall } from "@/lib/livekit-voice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,27 +84,32 @@ export async function POST(request: NextRequest) {
       include: { contact: { select: { name: true } } }
     });
 
-    const origin = appBaseUrl(request.nextUrl.origin);
-    const answerUrl = `${origin}/api/webhooks/plivo/answer?callId=${encodeURIComponent(voiceCall.id)}`;
-    const hangupUrl = `${origin}/api/webhooks/plivo/status?callId=${encodeURIComponent(voiceCall.id)}`;
-
-    const result = await makeOutboundCall({ config: voice.config, to: toNumber, answerUrl, hangupUrl });
+    // Sign a short-lived token so the LiveKit worker can fetch this call's
+    // context (creds + prompt + greeting + KB) from /api/internal/voice/context.
+    const token = await signCallToken({ callId: voiceCall.id, tenantId });
+    const result = await placeOutboundCall({
+      callId: voiceCall.id,
+      token,
+      toNumber: normalizePlivoNumber(toNumber),
+      fromNumber: normalizePlivoNumber(voice.config.PLIVO_PHONE_NUMBER),
+      maxSeconds: maxCallSeconds(voice.config)
+    });
 
     if (!result.ok) {
       const failed = await prisma.voiceCall.update({
         where: { id: voiceCall.id },
-        data: { status: "FAILED", errorMessage: result.error ?? "Plivo call failed.", endedAt: new Date() },
+        data: { status: "FAILED", errorMessage: result.error ?? "Could not place the call.", endedAt: new Date() },
         include: { contact: { select: { name: true } } }
       });
       emitTenantEvent(tenantId, "voice.call.updated", { id: failed.id, status: failed.status });
-      throw new ApiError(502, "PLIVO_CALL_FAILED", result.error ?? "Plivo could not place the call.");
+      throw new ApiError(502, "VOICE_CALL_FAILED", result.error ?? "Could not place the call.");
     }
 
     const ringing = await prisma.voiceCall.update({
       where: { id: voiceCall.id },
       data: {
         status: "RINGING",
-        metadata: result.requestUuid ? { requestUuid: result.requestUuid } : undefined
+        metadata: result.roomName ? { roomName: result.roomName } : undefined
       },
       include: { contact: { select: { name: true } } }
     });

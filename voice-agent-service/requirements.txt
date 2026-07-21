@@ -1,9 +1,10 @@
-# Pin to a recent Pipecat release. The Sarvam (Saarika/Bulbul) and Plivo
-# integrations track the version — if you change this, re-check the imports in
-# bot.py (see README.md).
-pipecat-ai[silero,anthropic,sarvam]>=0.0.60
-fastapi>=0.115
-uvicorn[standard]>=0.30
+# LiveKit Agents worker (replaces the old Pipecat media service). Pinned to the
+# 1.6.x line the agent.py was written+verified against — if you bump this,
+# re-check the AgentSession / session.say / sarvam.* / anthropic.LLM signatures
+# (see agent.py header). The four livekit packages must stay version-aligned.
+livekit-agents~=1.6.6
+livekit-plugins-sarvam~=1.6.6
+livekit-plugins-anthropic~=1.6.6
+livekit-plugins-silero~=1.6.6
 httpx>=0.27
 python-dotenv>=1.0
-loguru>=0.7
