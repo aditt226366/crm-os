@@ -69,22 +69,30 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=4403)
         return
 
-    # Plivo streams a "connected" frame followed by a "start" frame carrying the
-    # streamId / callId. Read them before starting the pipeline.
+    # Plivo streams JSON text frames. Unlike Twilio, `streamId` is at the TOP
+    # LEVEL of each frame (not nested under a "start" object), and there is no
+    # leading "connected" frame to skip. `callId` appears in the "start" event.
+    # Scan the first few frames until we have the streamId (usually frame #1).
+    stream_id = None
+    call_id = None
     try:
         messages = websocket.iter_text()
-        await messages.__anext__()  # "connected" (or first "start")
-        start_payload = json.loads(await messages.__anext__())
-    except (StopAsyncIteration, json.JSONDecodeError) as error:
-        logger.error(f"could not read Plivo start frames: {error}")
-        await websocket.close(code=4400)
-        return
+        for _ in range(20):
+            raw = await messages.__anext__()
+            try:
+                data = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            start_obj = data.get("start") if isinstance(data.get("start"), dict) else {}
+            stream_id = stream_id or data.get("streamId") or data.get("stream_id") or start_obj.get("streamId")
+            call_id = call_id or start_obj.get("callId") or data.get("callId")
+            if stream_id:
+                break
+    except StopAsyncIteration:
+        pass
 
-    start = start_payload.get("start", {})
-    stream_id = start.get("streamId") or start.get("stream_id")
-    call_id = start.get("callId") or start.get("call_id")
     if not stream_id:
-        logger.error(f"no streamId in Plivo start frame: {start_payload}")
+        logger.error("no streamId found in Plivo frames")
         await websocket.close(code=4400)
         return
 
