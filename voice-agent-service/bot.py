@@ -112,7 +112,13 @@ async def run_bot(websocket, token: str, app_url: str, stream_id: str, call_id: 
     greeting = context.get("greeting")
     max_seconds = int(context.get("maxSeconds", 300))
 
-    serializer = PlivoFrameSerializer(stream_id=stream_id, call_id=call_id)
+    # auto_hang_up (on by default) needs Plivo auth creds to call the hangup API;
+    # we end calls via the /api/webhooks/plivo/status webhook instead, so disable it.
+    serializer = PlivoFrameSerializer(
+        stream_id=stream_id,
+        call_id=call_id,
+        params=PlivoFrameSerializer.InputParams(auto_hang_up=False),
+    )
 
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
