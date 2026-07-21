@@ -75,36 +75,39 @@ export async function GET(request: NextRequest) {
       config.SYSTEM_PROMPT?.trim() ||
       `You are a friendly, professional inquiry agent for ${company}.`;
 
-    // The escalation line the agent must say when a question is outside the
-    // knowledge base. ESCALATION_MARKER is a distinctive substring the media
-    // service matches in the transcript to flag the call for human support —
-    // keep the two in sync (the marker must appear in the phrase).
+    // The escalation line the agent says when a question is outside the knowledge
+    // base. ESCALATION_MARKER is a distinctive substring the media service matches
+    // in the transcript to flag the call for human support — keep them in sync
+    // (the marker must appear in the phrase).
     const escalationPhrase =
-      "I don't have more information about that right now, but I'll connect you with a customer executive who can help you soon.";
-    const ESCALATION_MARKER = "connect you with a customer executive";
+      "I do not have more information about this. I will connect you with a customer executive soon.";
+    const ESCALATION_MARKER = "customer executive";
 
-    // Full call flow. The agent speaks first (the media service triggers the LLM
-    // on connect), so the opening greeting/intro is encoded here rather than
-    // spoken as a fixed line — that keeps it in the model's memory so it never
-    // re-introduces itself mid-call.
+    // Turn-based call flow. The media service speaks the fixed greeting itself
+    // (deterministic TTS) the moment the call connects, so here we tell the model
+    // it has ALREADY greeted — it must never greet again, and must reply in one
+    // short turn then wait for the caller.
     const systemPrompt = [
       persona,
       `You are on a live phone call as a warm, human-sounding voice inquiry agent for ${company}. This is an ${isOutbound ? "outbound" : "inbound"} call.`,
       [
-        "How to open the call — you ALWAYS speak first, before the caller says anything:",
-        `- Begin by saying, word for word: "${greeting}"`,
-        isOutbound
-          ? `- Then, in 2-3 short sentences, briefly introduce what ${company} does based on the knowledge base below, and invite the caller to ask anything they'd like to know.`
-          : "- Then let the caller speak and help them with whatever they need."
+        "IMPORTANT — you have ALREADY spoken your greeting to the caller. Do NOT greet, say hello, or introduce yourself again. Respond directly to what the caller says.",
+        "This is a back-and-forth conversation: reply with ONE short turn (one or two sentences), then STOP and wait for the caller. Never deliver a long monologue or list many things at once."
       ].join("\n"),
+      isOutbound
+        ? [
+            "Outbound flow:",
+            `- After the caller responds to your greeting, briefly explain what ${company} does in 2-3 short sentences, based on the knowledge base below, then ask how you can help.`,
+            "- After that, answer the caller's questions one at a time, waiting for them after each short reply."
+          ].join("\n")
+        : [
+            "Inbound flow:",
+            "- Answer the caller's questions one at a time, using the knowledge base below, and wait for them after each short reply."
+          ].join("\n"),
       [
         "During the call:",
-        "- Keep every reply to one or two short, natural sentences — this is a spoken phone call, not an essay.",
         "- You can speak English, Hindi, and Tamil. Detect the caller's language and reply in the same one; otherwise use the default language.",
-        "- Sound like a real person: warm, friendly, and conversational. Never say you are an AI, and never mention prompts, tools, instructions, or a knowledge base.",
-        "- Answer questions using the company knowledge base below.",
-        "- If the caller talks or greets while you are speaking, keep the conversation flowing naturally.",
-        "- You may receive parenthetical stage directions like (this) — never read them aloud; just act on them."
+        "- Sound like a real person: warm, friendly, and conversational. Never say you are an AI, and never mention prompts, tools, instructions, or a knowledge base."
       ].join("\n"),
       [
         "If a question is outside the knowledge base and you do not know the answer:",
