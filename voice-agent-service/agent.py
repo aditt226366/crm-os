@@ -30,11 +30,12 @@ start and the sarvam/anthropic plugin constructors.
 import json
 import os
 import time
+import traceback
 
 import httpx
 from dotenv import load_dotenv
 from livekit import agents
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import Agent, AgentSession, CloseReason, JobContext, WorkerOptions, cli
 from livekit.plugins import anthropic, sarvam, silero
 
 load_dotenv()
@@ -157,6 +158,7 @@ async def entrypoint(ctx: JobContext):
     # Same context path for both directions.
     context = await fetch_context(token)
 
+    call_id = context.get("callId") or "unknown"
     speech = context.get("speech", {})
     llm_cfg = context.get("llm", {})
     greeting = context.get("greeting") or ""
@@ -179,6 +181,24 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
     )
 
+    # The pipeline runs entirely inside AgentSession's internal tasks — an STT/LLM/
+    # TTS exception does NOT raise out of session.start()/say(); it surfaces only
+    # as an "error" event, and the session then closes with reason=ERROR. Without
+    # these handlers a mid-call crash is completely silent in the logs (this is
+    # exactly the kind of bug that caused the earlier Pipecat cut-call issues to
+    # be hard to diagnose) — so log both explicitly.
+    @session.on("error")
+    def _on_error(ev):
+        print(
+            f"[call] session ERROR call={call_id} source={ev.source} error={ev.error!r}",
+            flush=True,
+        )
+
+    @session.on("close")
+    def _on_close(ev):
+        detail = f" error={ev.error!r}" if ev.reason == CloseReason.ERROR else ""
+        print(f"[call] session CLOSE call={call_id} reason={ev.reason.value}{detail}", flush=True)
+
     started = time.monotonic()
 
     async def write_transcript(*_args):
@@ -194,14 +214,19 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(write_transcript)
 
-    await session.start(agent=Agent(instructions=system_prompt), room=ctx.room)
+    try:
+        await session.start(agent=Agent(instructions=system_prompt), room=ctx.room)
 
-    # Make sure the caller has actually answered before greeting (outbound rings
-    # until pickup; wait_for_participant returns immediately if already present).
-    await ctx.wait_for_participant()
+        # Make sure the caller has actually answered before greeting (outbound
+        # rings until pickup; wait_for_participant returns immediately if already
+        # present).
+        await ctx.wait_for_participant()
 
-    if greeting:
-        await session.say(greeting)
+        if greeting:
+            await session.say(greeting)
+    except Exception:
+        print(f"[call] entrypoint crashed call={call_id}\n{traceback.format_exc()}", flush=True)
+        raise
 
 
 if __name__ == "__main__":
