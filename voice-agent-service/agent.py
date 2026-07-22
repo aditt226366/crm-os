@@ -143,10 +143,16 @@ async def entrypoint(ctx: JobContext):
     except (TypeError, ValueError):
         metadata = {}
 
+    # CRITICAL: wait for the caller/customer to be in the room BEFORE building and
+    # starting the session. If session.start() runs first (outbound rings for a
+    # while before pickup), RoomIO has no participant to subscribe to, so the STT
+    # never receives the caller's audio — the agent stays deaf, transcribes
+    # nothing, and the call eventually drops. Waiting first links both audio input
+    # (STT) and output (TTS) to the caller.
     token = metadata.get("token")
     if not token:
-        # INBOUND: wait for the SIP caller, read the dialed/caller numbers from the
-        # SIP attributes, and have the control plane resolve the tenant + create the
+        # INBOUND: read the dialed/caller numbers from the SIP participant
+        # attributes, then have the control plane resolve the tenant + create the
         # call row (returns callId + token).
         participant = await ctx.wait_for_participant()
         attributes = participant.attributes or {}
@@ -154,6 +160,9 @@ async def entrypoint(ctx: JobContext):
         caller = _sip_attr(attributes, "sip.phoneNumber", "sip.fromNumber")
         started = await start_inbound_call(dialed, caller)
         token = started.get("token")
+    else:
+        # OUTBOUND: wait for the customer to answer (join the room) before starting.
+        await ctx.wait_for_participant()
 
     # Same context path for both directions.
     context = await fetch_context(token)
@@ -228,12 +237,9 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(write_transcript)
 
     try:
+        # The participant is already present (waited for above), so the session
+        # links STT input + TTS output to the caller on start.
         await session.start(agent=Agent(instructions=system_prompt), room=ctx.room)
-
-        # Make sure the caller has actually answered before greeting (outbound
-        # rings until pickup; wait_for_participant returns immediately if already
-        # present).
-        await ctx.wait_for_participant()
 
         if greeting:
             await session.say(greeting)
