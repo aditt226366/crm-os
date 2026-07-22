@@ -43,7 +43,7 @@ load_dotenv()
 APP_URL = os.getenv("APP_URL", "http://127.0.0.1:3000").rstrip("/")
 VOICE_SERVICE_SECRET = os.getenv("VOICE_SERVICE_SECRET", "")
 AGENT_NAME = os.getenv("VOICE_AGENT_NAME", "voice-inquiry-agent")
-STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saarika:v2.5")
+STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v3")
 # bulbul:v2 + a female speaker (anushka) matches the known-good original config;
 # /context can override the model, speaker, and language per tenant.
 TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v2")
@@ -169,8 +169,20 @@ async def entrypoint(ctx: JobContext):
     speaker = speech.get("speaker") or "anushka"
     tts_model = speech.get("ttsModel") or TTS_MODEL
 
+    # Sarvam's LiveKit STT plugin does its OWN endpointing and only emits
+    # end-of-speech when flush_signal=True AND the session uses
+    # turn_detection="stt". Passing a competing Silero VAD with no turn_detection
+    # (the old config) meant the caller's turn never ended -> the LLM was never
+    # called -> the agent went silent and the call timed out. This is Sarvam's
+    # documented working LiveKit config.
     session = AgentSession(
-        stt=sarvam.STT(api_key=speech["sarvamApiKey"], model=STT_MODEL),
+        stt=sarvam.STT(
+            api_key=speech["sarvamApiKey"],
+            model=STT_MODEL,
+            language="unknown",  # auto-detect English / Hindi / Tamil
+            mode="transcribe",
+            flush_signal=True,
+        ),
         llm=anthropic.LLM(api_key=llm_cfg["anthropicApiKey"], model=llm_cfg.get("model", "claude-sonnet-4-6")),
         tts=sarvam.TTS(
             api_key=speech["sarvamApiKey"],
@@ -178,7 +190,8 @@ async def entrypoint(ctx: JobContext):
             target_language_code=tts_language,
             speaker=speaker,
         ),
-        vad=ctx.proc.userdata["vad"],
+        turn_detection="stt",
+        min_endpointing_delay=0.07,
     )
 
     # The pipeline runs entirely inside AgentSession's internal tasks — an STT/LLM/
