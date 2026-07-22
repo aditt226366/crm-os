@@ -27,6 +27,7 @@ scratchpad introspection). If you bump the version, re-check AgentSession/say/
 start and the sarvam/anthropic plugin constructors.
 """
 
+import asyncio
 import json
 import os
 import time
@@ -134,6 +135,32 @@ def _sip_attr(attributes: dict, *keys: str) -> str:
     return ""
 
 
+async def wait_until_answered(ctx, participant, timeout: float = 45.0) -> None:
+    """Block until an OUTBOUND callee actually ANSWERS.
+
+    On outbound calls LiveKit adds the SIP participant to the room while the phone
+    is still ringing — its audio track only goes live once the callee picks up. If
+    the session starts before that, the STT is wired to a track-less participant
+    and never hears the caller (the agent is 'deaf'). Waiting for
+    sip.callStatus == "active" guarantees the caller's audio track exists first.
+    Falls through after `timeout` so a trunk that never reports callStatus can't
+    hang the call forever."""
+    if participant is None:
+        return
+    identity = participant.identity
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = ctx.room.remote_participants.get(identity) or participant
+        status = (current.attributes or {}).get("sip.callStatus", "")
+        if status == "active":
+            return
+        if status in ("hangup", "failed", "rejected", "busy", "noanswer", "canceled"):
+            print(f"[call] outbound not answered: sip.callStatus={status!r}", flush=True)
+            return
+        await asyncio.sleep(0.2)
+    print("[call] wait_until_answered timed out; proceeding anyway", flush=True)
+
+
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
@@ -151,9 +178,9 @@ async def entrypoint(ctx: JobContext):
     # (STT) and output (TTS) to the caller.
     token = metadata.get("token")
     if not token:
-        # INBOUND: read the dialed/caller numbers from the SIP participant
-        # attributes, then have the control plane resolve the tenant + create the
-        # call row (returns callId + token).
+        # INBOUND: the caller is already connected. Read the dialed/caller numbers
+        # from the SIP participant attributes, then have the control plane resolve
+        # the tenant + create the call row (returns callId + token).
         participant = await ctx.wait_for_participant()
         attributes = participant.attributes or {}
         dialed = _sip_attr(attributes, "sip.trunkPhoneNumber", "sip.toNumber", "sip.dialedNumber")
@@ -161,8 +188,11 @@ async def entrypoint(ctx: JobContext):
         started = await start_inbound_call(dialed, caller)
         token = started.get("token")
     else:
-        # OUTBOUND: wait for the customer to answer (join the room) before starting.
-        await ctx.wait_for_participant()
+        # OUTBOUND: the callee's participant appears while still ringing. Wait for
+        # them to actually ANSWER before starting, so the STT is wired to their
+        # (now-live) audio track.
+        participant = await ctx.wait_for_participant()
+        await wait_until_answered(ctx, participant)
 
     # Same context path for both directions.
     context = await fetch_context(token)
@@ -220,6 +250,17 @@ async def entrypoint(ctx: JobContext):
     def _on_close(ev):
         detail = f" error={ev.error!r}" if ev.reason == CloseReason.ERROR else ""
         print(f"[call] session CLOSE call={call_id} reason={ev.reason.value}{detail}", flush=True)
+
+    # Diagnostics: prove whether the agent actually hears the caller. If we see
+    # "caller speaking" + "heard caller: ..." the STT is receiving audio; if we
+    # see neither while the caller talks, the audio input is still not wired.
+    @session.on("user_state_changed")
+    def _on_user_state(ev):
+        print(f"[call] caller state {ev.old_state} -> {ev.new_state}", flush=True)
+
+    @session.on("user_input_transcribed")
+    def _on_user_transcript(ev):
+        print(f"[call] heard caller (final={ev.is_final}): {ev.transcript!r}", flush=True)
 
     started = time.monotonic()
 
