@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { FEATURE_KEYS, MANAGED_FEATURE_KEYS, defaultEnabledFeatures, type Plan } from "@/lib/constants";
+import { purgeRemovedVoiceAgentRows } from "@/lib/legacy-enum-cleanup";
 
 type ExistsRow = {
   exists: boolean;
@@ -126,6 +127,7 @@ export async function ensureTenantFeatureSchema() {
       await repairTenantFeatureSchema();
     }
 
+    await purgeRemovedVoiceAgentRows();
     tenantFeatureSchemaReady = true;
   })().finally(() => {
     tenantFeatureSchemaPromise = null;

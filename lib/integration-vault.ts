@@ -453,7 +453,7 @@ async function verifyWhatsappCloud(config: IntegrationConfig, options: VerifyOpt
     const info = graphErrorInfo(phoneResponse.data);
     return isTokenOrPermissionError(info)
       ? failure(
-          `WHATSAPP_ACCESS_TOKEN is invalid or lacks permission for this phone number. The phone number ID looks valid, but the token cannot read it — use a token from the same Meta app/business with whatsapp_business_management permission.${metaHint(info)}`,
+          `WHATSAPP_ACCESS_TOKEN is invalid or lacks permission for this phone number. The phone number ID looks valid, but the token cannot read it â€” use a token from the same Meta app/business with whatsapp_business_management permission.${metaHint(info)}`,
           "WHATSAPP_ACCESS_TOKEN"
         )
       : failure(`WHATSAPP_PHONE_NUMBER_ID wrong.${metaHint(info)}`, "WHATSAPP_PHONE_NUMBER_ID");
@@ -634,13 +634,39 @@ async function verifyMetaAds(config: IntegrationConfig) {
   });
 }
 
-async function verifyKnowledgeBase(config: IntegrationConfig) {
+/**
+ * How much of the knowledge base actually reached the AI agent. Only chunk rows
+ * are read at reply time, so "connected" with 0 chunks means the agent answers
+ * with no company knowledge â€” surface that in the message instead of hiding it.
+ */
+async function indexedKnowledgeCounts(tenantId: string) {
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const [documents, chunks] = await Promise.all([
+      prisma.knowledgeDocument.count({ where: { tenantId } }),
+      prisma.knowledgeChunk.count({ where: { tenantId } })
+    ]);
+    return { documents, chunks };
+  } catch {
+    return { documents: 0, chunks: 0 };
+  }
+}
+
+function indexedSuffix(counts: { documents: number; chunks: number }) {
+  return counts.chunks
+    ? ` â€” ${counts.chunks} indexed section${counts.chunks === 1 ? "" : "s"} available to the AI agent`
+    : " â€” but nothing is indexed yet, so the AI agent has no company knowledge. Choose the PDF / website and click Index Knowledge Base.";
+}
+
+async function verifyKnowledgeBase(config: IntegrationConfig, options: VerifyOptions) {
   const hasWebsite = Boolean(config.COMPANY_WEBSITE_URL);
   const hasPdf = Boolean(config.PDF_FILE_NAME);
 
   if (!hasWebsite && !hasPdf) {
     return failure("Company website wrong");
   }
+
+  const indexed = await indexedKnowledgeCounts(options.tenantId);
 
   if (hasWebsite) {
     if (!urlValid(config.COMPANY_WEBSITE_URL)) {
@@ -662,10 +688,11 @@ async function verifyKnowledgeBase(config: IntegrationConfig) {
     if (readableText.length < 20) {
       return failure("Company website wrong");
     }
-    return success("Knowledge Base connected successfully", {
+    return success(`Knowledge Base connected successfully${indexedSuffix(indexed)}`, {
       sourceType: "website",
-      documentCount: 1,
-      knowledgeBaseStatus: "INDEXED"
+      documentCount: indexed.documents,
+      chunkCount: indexed.chunks,
+      knowledgeBaseStatus: indexed.chunks ? "INDEXED" : "UPLOADED"
     });
   }
 
@@ -673,10 +700,11 @@ async function verifyKnowledgeBase(config: IntegrationConfig) {
     return failure("PDF file wrong");
   }
 
-  return success("Knowledge Base connected successfully", {
+  return success(`Knowledge Base connected successfully${indexedSuffix(indexed)}`, {
     sourceType: "pdf",
-    documentCount: 1,
-    knowledgeBaseStatus: "UPLOADED"
+    documentCount: indexed.documents,
+    chunkCount: indexed.chunks,
+    knowledgeBaseStatus: indexed.chunks ? "INDEXED" : "UPLOADED"
   });
 }
 
@@ -763,53 +791,6 @@ async function verifyAiModel(config: IntegrationConfig) {
   });
 }
 
-async function verifyVoiceAgent(config: IntegrationConfig) {
-  if (missingOrEmpty(config, "PLIVO_AUTH_ID")) {
-    return failure("PLIVO_AUTH_ID wrong");
-  }
-  if (missingOrEmpty(config, "PLIVO_AUTH_TOKEN") || config.PLIVO_AUTH_TOKEN.length < 8) {
-    return failure("PLIVO_AUTH_TOKEN wrong");
-  }
-  if (missingOrEmpty(config, "PLIVO_PHONE_NUMBER") || !/^\+?\d{7,15}$/.test(config.PLIVO_PHONE_NUMBER.replace(/[\s-]/g, ""))) {
-    return failure("PLIVO_PHONE_NUMBER wrong");
-  }
-  if (missingOrEmpty(config, "SARVAM_API_KEY") || config.SARVAM_API_KEY.length < 8) {
-    return failure("SARVAM_API_KEY wrong");
-  }
-  if (missingOrEmpty(config, "ANTHROPIC_API_KEY") || config.ANTHROPIC_API_KEY.length < 8) {
-    return failure("ANTHROPIC_API_KEY wrong");
-  }
-
-  const authHeader = `Basic ${Buffer.from(`${config.PLIVO_AUTH_ID}:${config.PLIVO_AUTH_TOKEN}`).toString("base64")}`;
-  const response = await fetchJson(`https://api.plivo.com/v1/Account/${encodeURIComponent(config.PLIVO_AUTH_ID)}/`, {
-    headers: { Authorization: authHeader }
-  });
-
-  if (response.timedOut) {
-    return failure("Plivo verification timed out");
-  }
-  if (response.status === 401 || response.status === 403) {
-    return failure("PLIVO_AUTH_TOKEN wrong");
-  }
-  if (response.status === 404) {
-    return failure("PLIVO_AUTH_ID wrong");
-  }
-  if (!response.ok) {
-    return failure("PLIVO_AUTH_ID wrong");
-  }
-
-  const account = response.data as { name?: string; account_type?: string; state?: string } | null;
-  return success("Voice Agent connected successfully", {
-    plivoAccount: account?.name ?? config.PLIVO_AUTH_ID,
-    accountType: account?.account_type ?? null,
-    virtualNumber: config.PLIVO_PHONE_NUMBER,
-    defaultLanguage: config.DEFAULT_LANGUAGE || "en-IN",
-    ttsVoice: config.TTS_VOICE || "anushka",
-    llmModel: config.LLM_MODEL || "claude-sonnet-4-6",
-    lastVerifiedAt: new Date().toISOString()
-  });
-}
-
 export async function verifyIntegrationConfig(type: IntegrationType, config: IntegrationConfig, options: VerifyOptions) {
   if (type === "AI_MODEL") {
     config.AI_PROVIDER ||= "Anthropic";
@@ -829,7 +810,6 @@ export async function verifyIntegrationConfig(type: IntegrationType, config: Int
   if (type === "WHATSAPP_CLOUD") return verifyWhatsappCloud(config, options);
   if (type === "WHATSAPP_TEMPLATE_SETTINGS") return verifyTemplateSettings(config, options.dependencies);
   if (type === "META_ADS") return verifyMetaAds(config);
-  if (type === "KNOWLEDGE_BASE") return verifyKnowledgeBase(config);
-  if (type === "VOICE_AGENT") return verifyVoiceAgent(config);
+  if (type === "KNOWLEDGE_BASE") return verifyKnowledgeBase(config, options);
   return verifyAiModel(config);
 }

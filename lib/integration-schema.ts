@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { databaseEnvCheck } from "@/lib/db-env";
+import { purgeRemovedVoiceAgentRows } from "@/lib/legacy-enum-cleanup";
 
 type DatabaseRow = {
   currentDatabase: string;
@@ -137,8 +138,7 @@ BEGIN
     'WHATSAPP_TEMPLATE_SETTINGS',
     'META_ADS',
     'KNOWLEDGE_BASE',
-    'AI_MODEL',
-    'VOICE_AGENT'
+    'AI_MODEL'
   );
 EXCEPTION
   WHEN duplicate_object THEN NULL;
@@ -149,7 +149,6 @@ END $$;`,
   `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'META_ADS';`,
   `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'KNOWLEDGE_BASE';`,
   `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'AI_MODEL';`,
-  `ALTER TYPE public."IntegrationType" ADD VALUE IF NOT EXISTS 'VOICE_AGENT';`,
   `DO $$
 BEGIN
   CREATE TYPE public."IntegrationStatus" AS ENUM (
@@ -249,6 +248,7 @@ export async function ensureIntegrationSchema() {
       }
     }
 
+    await purgeRemovedVoiceAgentRows();
     integrationSchemaReady = true;
   })().finally(() => {
     integrationSchemaPromise = null;

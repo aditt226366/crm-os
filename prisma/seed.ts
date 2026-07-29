@@ -111,18 +111,6 @@ async function seedIntegrations(tenantId: string, adminId: string, connected: In
           AI_PROVIDER: "OpenAI",
           AI_MODEL_NAME: "gpt-4.1-mini",
           AI_API_KEY: token
-        },
-        VOICE_AGENT: {
-          PLIVO_AUTH_ID: `MA${suffix}`,
-          PLIVO_AUTH_TOKEN: token,
-          PLIVO_PHONE_NUMBER: `+9122${suffix.replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`,
-          SARVAM_API_KEY: token,
-          DEFAULT_LANGUAGE: "en-IN",
-          TTS_VOICE: "anushka",
-          ANTHROPIC_API_KEY: token,
-          LLM_MODEL: "claude-sonnet-4-6",
-          COMPANY_DISPLAY_NAME: "Demo Company",
-          USE_KNOWLEDGE_BASE: "Yes"
         }
       };
       const config = configByType[type];

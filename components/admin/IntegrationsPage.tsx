@@ -12,7 +12,6 @@ import {
   LayoutTemplate,
   Megaphone,
   MessageCircle,
-  PhoneCall,
   Save,
   Sheet,
   TestTube2,
@@ -93,8 +92,7 @@ const iconMap = {
   template: LayoutTemplate,
   ads: Megaphone,
   knowledge: FileText,
-  ai: Bot,
-  voice: PhoneCall
+  ai: Bot
 } as const;
 
 function fieldKey(type: IntegrationType, field: string) {
@@ -134,7 +132,8 @@ function formatDebugValue(value: unknown) {
 
 async function apiRequest<T>(url: string, options: RequestInit = {}) {
   const headers = new Headers(options.headers);
-  if (!headers.has("Content-Type") && options.body) {
+  // FormData must keep the browser-generated multipart boundary.
+  if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -328,6 +327,9 @@ export function CompanyIntegrationManager({
   const [repairingDb, setRepairingDb] = useState(false);
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
   const [debugDetails, setDebugDetails] = useState<Record<IntegrationType, IntegrationDebugDetails | null>>({} as Record<IntegrationType, IntegrationDebugDetails | null>);
+  // The picked PDF itself, not just its name: it has to be uploaded and indexed
+  // or the AI agent has no company knowledge to answer from.
+  const [knowledgeFile, setKnowledgeFile] = useState<File | null>(null);
   const companyId = company.id;
   const integrationMap = useMemo(() => integrationByType(integrations), [integrations]);
 
@@ -408,6 +410,26 @@ export function CompanyIntegrationManager({
     });
   }
 
+  /**
+   * Turns the picked PDF / website into KnowledgeChunk rows. Without this the
+   * card only stored a filename, so the AI agent answered with no company
+   * knowledge at all. Returns a suffix for the toast, or "" when there is
+   * nothing new to index.
+   */
+  async function ingestKnowledgeBase(config: Record<string, string>) {
+    const websiteUrl = config.COMPANY_WEBSITE_URL?.trim() ?? "";
+    if (!knowledgeFile && !websiteUrl) return "";
+
+    const form = new FormData();
+    if (websiteUrl) form.append("url", websiteUrl);
+    if (knowledgeFile) form.append("file", knowledgeFile);
+    const { data } = await apiRequest<{ message?: string }>(`/api/admin/companies/${companyId}/knowledge-base/ingest`, {
+      method: "POST",
+      body: form
+    });
+    return data.message ? ` ${data.message}.` : "";
+  }
+
   async function runAction(type: IntegrationType, action: "save" | "verify" | "test" | "disconnect") {
     const key = pendingKey(type, action);
     setPending((current) => ({ ...current, [key]: true }));
@@ -416,6 +438,10 @@ export function CompanyIntegrationManager({
     try {
       const title = INTEGRATION_CATALOG[type].title;
       const config = configWithCatalogDefaults(type, formValues[type] ?? {});
+      const ingestSummary =
+        type === "KNOWLEDGE_BASE" && (action === "save" || action === "verify")
+          ? await ingestKnowledgeBase(config)
+          : "";
       let route = `/api/admin/companies/${companyId}/integrations/${type}`;
       let requestOptions: RequestInit = {};
 
@@ -459,7 +485,7 @@ export function CompanyIntegrationManager({
 
       if (data.integration) applyIntegrationUpdate(data.integration);
       clearProtectedFields(type);
-      setToast(action === "disconnect" ? `${title} disconnected` : message);
+      setToast(action === "disconnect" ? `${title} disconnected` : `${message}${ingestSummary}`);
       if (action === "disconnect") {
         setFormValues((current) => ({ ...current, [type]: {} }));
       }
@@ -545,6 +571,7 @@ export function CompanyIntegrationManager({
               debugDetails={debugDetails[type] ?? null}
               onVisibleChange={(field, visible) => setVisibleFields((current) => ({ ...current, [fieldKey(type, field)]: visible }))}
               onChange={(field, value) => updateFormValue(type, field, value)}
+              onFileChange={(file) => setKnowledgeFile(file)}
               onSave={() => runAction(type, "save")}
               onVerify={() => runAction(type, "verify")}
               onTest={() => runAction(type, "test")}
@@ -646,6 +673,7 @@ function IntegrationFormCard({
   debugDetails,
   onVisibleChange,
   onChange,
+  onFileChange,
   onSave,
   onVerify,
   onTest,
@@ -663,6 +691,7 @@ function IntegrationFormCard({
   debugDetails: IntegrationDebugDetails | null;
   onVisibleChange: (field: string, visible: boolean) => void;
   onChange: (field: string, value: string) => void;
+  onFileChange: (file: File | null) => void;
   onSave: () => void;
   onVerify: () => void;
   onTest: () => void;
@@ -714,6 +743,7 @@ function IntegrationFormCard({
               visible={Boolean(visibleFields[fieldKey(type, field.name)])}
               onVisibleChange={(visible) => onVisibleChange(field.name, visible)}
               onChange={(value) => onChange(field.name, value)}
+              onFileChange={onFileChange}
             />
           </Fragment>
         ))}
@@ -788,7 +818,8 @@ function IntegrationField({
   integration,
   visible,
   onVisibleChange,
-  onChange
+  onChange,
+  onFileChange
 }: {
   type: IntegrationType;
   field: IntegrationFieldDefinition;
@@ -798,6 +829,7 @@ function IntegrationField({
   visible: boolean;
   onVisibleChange: (visible: boolean) => void;
   onChange: (value: string) => void;
+  onFileChange?: (file: File | null) => void;
 }) {
   const currentValue = values[field.name] ?? field.defaultValue ?? "";
   const maskedValue = integration?.maskedDisplay?.[field.name];
@@ -851,6 +883,7 @@ function IntegrationField({
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
               const file = event.target.files?.[0];
               onChange(file?.name ?? "");
+              onFileChange?.(file ?? null);
             }}
             className="block w-full cursor-pointer text-xs text-slate-300 file:mr-3 file:rounded-full file:border-0 file:bg-cyan-300 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-950"
           />

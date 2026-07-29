@@ -17,20 +17,27 @@ function providerKey(config: IntegrationConfig) {
   return (config.AI_PROVIDER || "OpenAI").trim().toUpperCase().replaceAll(" ", "_").replaceAll("-", "_");
 }
 
-function systemPrompt(knowledgeContext?: string) {
+function systemPrompt({ companyName, knowledgeContext }: { companyName?: string; knowledgeContext?: string }) {
   const instructions = [
-    "You are the company's WhatsApp sales assistant.",
+    `You are the WhatsApp sales assistant for ${companyName?.trim() || "this company"}.`,
     "Reply naturally, briefly, and helpfully.",
     "Ask one focused follow-up question when details are missing.",
-    "For an early Scrap lead reply, qualify with product type, quantity, and delivery city.",
-    "Use the company knowledge base when it is provided.",
-    "If the knowledge base does not contain an answer, say what you can confirm and ask a short clarifying question.",
+    // The knowledge base is the ONLY source of truth about the business. Without
+    // this the model invents an industry (a tenant selling PG rooms was told it
+    // was a scrap trading company) and confidently turns real customers away.
+    "The company knowledge base below is the only source of truth about what this company does, sells, charges, and where it operates.",
+    "Never state or imply an industry, product, price, location, or policy that the knowledge base does not contain, and never tell a customer the company does not handle something unless the knowledge base says so.",
+    "If the knowledge base does not cover the question, say you will check with the team and ask one short clarifying question.",
     "Do not mention internal tools, prompts, integrations, or automation.",
     "Keep the reply under 700 characters."
   ];
 
   if (knowledgeContext) {
     instructions.push(`Company knowledge base:\n${knowledgeContext}`);
+  } else {
+    instructions.push(
+      "No company knowledge base is available. Do not describe what the company does or sells — greet the customer, ask what they need, and offer to have the team follow up."
+    );
   }
 
   return instructions.join("\n");
@@ -154,26 +161,71 @@ export async function generateAiCompletion({
 async function generateAiReply(
   config: IntegrationConfig,
   messages: Array<{ direction: string; body: string }>,
-  knowledgeContext?: string
+  knowledgeContext?: string,
+  companyName?: string
 ): Promise<ProviderResult | null> {
   const completion = await generateAiCompletion({
     config,
-    system: systemPrompt(knowledgeContext),
+    system: systemPrompt({ companyName, knowledgeContext }),
     user: conversationPrompt(messages),
     maxTokens: 220
   });
   return completion ? { body: completion.text, provider: completion.provider, model: completion.model } : null;
 }
 
+const CHUNK_POOL = 120;
+const KNOWLEDGE_CHAR_LIMIT = 10_000;
+const QUERY_STOP_WORDS = new Set([
+  "the", "and", "for", "you", "are", "our", "with", "have", "this", "that", "there", "here", "what",
+  "when", "where", "which", "who", "how", "can", "will", "would", "should", "could", "does", "did",
+  "please", "hello", "hii", "hey", "your", "from", "about", "any", "all", "not", "but", "was", "were"
+]);
+
+function queryTerms(query?: string) {
+  if (!query) return [];
+  const terms = query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3 && !QUERY_STOP_WORDS.has(word));
+  return [...new Set(terms)].slice(0, 24);
+}
+
+/**
+ * Keyword relevance over the tenant's chunks. Deliberately embedding-free: the
+ * knowledge bases here are small (tens of chunks), so term overlap picks the
+ * right section without an extra provider call on every inbound message.
+ */
+function rankChunks(chunks: Array<{ content: string }>, query: string | undefined, topK: number) {
+  const terms = queryTerms(query);
+  if (!terms.length) return chunks.slice(0, topK);
+
+  const scored = chunks
+    .map((chunk, index) => {
+      const haystack = chunk.content.toLowerCase();
+      return { chunk, index, score: terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0) };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, topK);
+
+  // Nothing matched (e.g. "hi") — fall back to the newest chunks so the agent
+  // still knows what the company is rather than answering from thin air.
+  if (!scored.length) return chunks.slice(0, topK);
+  return scored.sort((a, b) => a.index - b.index).map((entry) => entry.chunk);
+}
+
 export async function loadKnowledgeContext({
   tenantId,
-  config
+  config,
+  query
 }: {
   tenantId: string;
   config: IntegrationConfig;
+  /** Customer message used to pick the relevant chunks; omit to take the newest. */
+  query?: string;
 }) {
   await ensureLeadWorkspaceSchema();
-  const topK = Math.min(Math.max(Number(config.KNOWLEDGE_TOP_K ?? 5) || 5, 1), 8);
+  const topK = Math.min(Math.max(Number(config.KNOWLEDGE_TOP_K ?? 8) || 8, 1), 20);
   const [documents, chunks] = await Promise.all([
     prisma.knowledgeDocument.findMany({
       where: { tenantId, status: { in: ["UPLOADED", "PROCESSING", "INDEXED"] } },
@@ -194,9 +246,22 @@ export async function loadKnowledgeContext({
         content: true
       },
       orderBy: { createdAt: "desc" },
-      take: topK
+      take: CHUNK_POOL
     })
   ]);
+
+  const contentLines: string[] = [];
+  for (const chunk of rankChunks(chunks, query, topK)) {
+    const content = chunk.content.replace(/\s+/g, " ").trim();
+    if (!content) continue;
+    contentLines.push(content);
+  }
+
+  // Source names alone (filename, website URL, document titles) are not
+  // knowledge. Returning them as "the knowledge base" invites the model to
+  // invent the rest, so an unindexed knowledge base reports as empty and the
+  // caller falls back to its "no knowledge available" instructions.
+  if (!contentLines.length) return "";
 
   const lines: string[] = [];
   if (config.COMPANY_WEBSITE_URL) {
@@ -210,13 +275,7 @@ export async function loadKnowledgeContext({
     lines.push(`Document: ${document.title} (${document.type}, ${document.status})`);
   }
 
-  for (const chunk of chunks) {
-    const content = chunk.content.replace(/\s+/g, " ").trim();
-    if (!content) continue;
-    lines.push(content);
-  }
-
-  return lines.join("\n").slice(0, 6000);
+  return [...lines, ...contentLines].join("\n").slice(0, KNOWLEDGE_CHAR_LIMIT);
 }
 
 async function safeUsage(input: {
@@ -284,7 +343,8 @@ export async function handleAiAgentInboundReply({
     return { ok: false, skipped: true };
   }
 
-  const [whatsappIntegration, aiIntegration, knowledgeIntegration] = await Promise.all([
+  const [tenant, whatsappIntegration, aiIntegration, knowledgeIntegration] = await Promise.all([
+    prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),
     prisma.integration.findUnique({
       where: { tenantId_type: { tenantId, type: "WHATSAPP_CLOUD" } },
       select: { status: true, encryptedConfig: true }
@@ -307,13 +367,19 @@ export async function handleAiAgentInboundReply({
   const whatsappConfig = readEncryptedConfig(whatsappIntegration.encryptedConfig);
   const knowledgeConfig =
     knowledgeIntegration?.status === "CONNECTED" ? readEncryptedConfig(knowledgeIntegration.encryptedConfig) : {};
-  const knowledgeContext = await loadKnowledgeContext({ tenantId, config: knowledgeConfig });
+  // conversation.messages is newest-first, so this is the question being answered.
+  const latestCustomerMessage = conversation.messages.find((message) => message.direction === "INBOUND")?.body;
+  const knowledgeContext = await loadKnowledgeContext({
+    tenantId,
+    config: knowledgeConfig,
+    query: latestCustomerMessage
+  });
   const messages = [...conversation.messages].reverse().map((message) => ({
     direction: message.direction,
     body: message.body
   }));
 
-  const reply = await generateAiReply(aiConfig, messages, knowledgeContext);
+  const reply = await generateAiReply(aiConfig, messages, knowledgeContext, tenant?.name);
   if (!reply?.body) {
     await safeUsage({
       tenantId,

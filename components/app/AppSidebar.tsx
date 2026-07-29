@@ -16,7 +16,6 @@ import {
   MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
-  PhoneCall,
   RadioTower,
   Settings,
   ShoppingBag,
@@ -42,7 +41,6 @@ const iconMap: Record<string, LucideIcon> = {
   Contacts: ContactRound,
   Templates: FileText,
   "Knowledge Base": Bot,
-  "Voice Agents": PhoneCall,
   Settings
 };
 

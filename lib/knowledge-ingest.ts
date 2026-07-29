@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 
-// Knowledge-base ingestion for the Voice Agent. Extracts real text (so it
-// actually reaches the LLM via KnowledgeChunk rows — loadKnowledgeContext only
-// surfaces chunk content, not filenames) with no new dependency:
+// Knowledge-base ingestion for the admin console Knowledge Base card. Extracts
+// real text (so it actually reaches the LLM via KnowledgeChunk rows —
+// loadKnowledgeContext only surfaces chunk content, not filenames) with no new
+// dependency:
 //   - website: fetch + strip HTML
 //   - PDF: Claude reads the document natively (uses the tenant's Anthropic key)
 
@@ -98,23 +99,32 @@ export async function storeKnowledgeDocument({
   title,
   type,
   text,
-  createdById
+  createdById,
+  source = "admin-console",
+  replaceExisting = false
 }: {
   tenantId: string;
   title: string;
   type: "URL" | "PDF";
   text: string;
   createdById?: string | null;
+  source?: string;
+  /** Drop earlier versions of the same source so re-uploads replace, not stack. */
+  replaceExisting?: boolean;
 }) {
   await ensureLeadWorkspaceSchema();
+  const documentTitle = title.slice(0, 200);
+  if (replaceExisting) {
+    await prisma.knowledgeDocument.deleteMany({ where: { tenantId, title: documentTitle } });
+  }
   const document = await prisma.knowledgeDocument.create({
     data: {
       tenantId,
-      title: title.slice(0, 200),
+      title: documentTitle,
       type,
       status: "INDEXED",
       createdById: createdById ?? undefined,
-      metadata: { source: "voice-agent" }
+      metadata: { source }
     }
   });
   const chunks = chunkText(text);
@@ -123,5 +133,5 @@ export async function storeKnowledgeDocument({
       data: chunks.map((content) => ({ tenantId, documentId: document.id, content }))
     });
   }
-  return document;
+  return { document, chunkCount: chunks.length };
 }

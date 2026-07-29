@@ -19,7 +19,7 @@ export type IntegrationCatalogItem = {
   type: IntegrationType;
   title: string;
   description: string;
-  icon: "sheets" | "whatsapp" | "template" | "ads" | "knowledge" | "ai" | "voice";
+  icon: "sheets" | "whatsapp" | "template" | "ads" | "knowledge" | "ai";
   fields: IntegrationFieldDefinition[];
   helpText?: string;
   testConnection?: boolean;
@@ -171,7 +171,8 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         name: "PDF_FILE_NAME",
         label: "PDF file upload",
         input: "file",
-        helpText: "PDF files only. File bytes are handled by the upload flow; this form stores tenant-scoped metadata."
+        helpText:
+          "PDF files only, up to 10 MB. Click Upload or Index Knowledge Base to extract the text so the AI agent can answer from it."
       }
     ]
   },
@@ -197,89 +198,6 @@ export const INTEGRATION_CATALOG: Record<IntegrationType, IntegrationCatalogItem
         input: "url",
         visibleWhen: { field: "AI_PROVIDER", value: "Custom OpenAI Compatible" }
       }
-    ]
-  },
-  VOICE_AGENT: {
-    type: "VOICE_AGENT",
-    title: INTEGRATION_DEFINITIONS.VOICE_AGENT.name,
-    description: INTEGRATION_DEFINITIONS.VOICE_AGENT.description,
-    icon: "voice",
-    helpText:
-      "Outbound & inbound AI voice calls on a virtual Indian number. Point the Plivo number's Application answer/hangup URLs at /api/webhooks/plivo. Languages supported: English, Hindi, Tamil (female voice).",
-    testConnection: true,
-    fields: [
-      {
-        name: "PLIVO_AUTH_ID",
-        label: "Plivo Auth ID",
-        input: "text",
-        required: true,
-        sensitive: true,
-        group: "Plivo (SIP Trunk)"
-      },
-      {
-        name: "PLIVO_AUTH_TOKEN",
-        label: "Plivo Auth Token",
-        input: "password",
-        required: true,
-        secret: true,
-        group: "Plivo (SIP Trunk)"
-      },
-      {
-        name: "PLIVO_PHONE_NUMBER",
-        label: "Virtual number (E.164)",
-        input: "text",
-        required: true,
-        sensitive: true,
-        group: "Plivo (SIP Trunk)",
-        placeholder: "+9122XXXXXXXX",
-        helpText: "The Plivo virtual Indian number. Used as the caller ID for outbound calls and to route inbound calls to this company."
-      },
-      {
-        name: "SARVAM_API_KEY",
-        label: "Sarvam API key",
-        input: "password",
-        required: true,
-        secret: true,
-        group: "Speech (Sarvam AI)",
-        helpText: "Powers both Saarika (speech-to-text) and Bulbul (text-to-speech)."
-      },
-      {
-        name: "DEFAULT_LANGUAGE",
-        label: "Default language",
-        input: "select",
-        group: "Speech (Sarvam AI)",
-        options: ["en-IN", "hi-IN", "ta-IN"],
-        defaultValue: "en-IN",
-        helpText: "English, Hindi, or Tamil. The agent auto-detects the caller's language and falls back to this."
-      },
-      {
-        name: "TTS_VOICE",
-        label: "Voice (female)",
-        input: "select",
-        group: "Speech (Sarvam AI)",
-        options: ["anushka", "manisha", "vidya", "arya"],
-        defaultValue: "anushka",
-        helpText: "Bulbul female speaker."
-      },
-      {
-        name: "ANTHROPIC_API_KEY",
-        label: "Anthropic API key",
-        input: "password",
-        required: true,
-        secret: true,
-        group: "LLM (Claude)"
-      },
-      {
-        name: "LLM_MODEL",
-        label: "Claude model",
-        input: "text",
-        group: "LLM (Claude)",
-        defaultValue: "claude-sonnet-4-6",
-        placeholder: "claude-sonnet-4-6"
-      }
-      // Agent persona (company name, greetings, instructions, KB toggle, max
-      // duration) is edited by the company user in the Voice Agents dashboard,
-      // not here — see app/api/app/voice-agents/settings + knowledge routes.
     ]
   }
 };
