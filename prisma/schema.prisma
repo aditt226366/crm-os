@@ -1,6 +1,12 @@
 generator client {
-  provider      = "prisma-client-js"
-  binaryTargets = ["native", "linux-arm64-openssl-3.0.x"]
+  provider = "prisma-client-js"
+  // "native" is resolved by inspecting the machine that runs `prisma generate`.
+  // The image is built by Kaniko rather than a normal Docker daemon, so pin the
+  // Debian/OpenSSL 3.0 targets explicitly as well: a missing engine for the
+  // runtime platform surfaces as a PrismaClientInitializationError that fails in
+  // ~1ms with no error code, which is indistinguishable from a bad connection
+  // string unless you read the message.
+  binaryTargets = ["native", "debian-openssl-3.0.x", "linux-arm64-openssl-3.0.x"]
 }
 
 datasource db {
