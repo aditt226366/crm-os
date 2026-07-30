@@ -1,26 +1,16 @@
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma";
+import { runRetentionSweep } from "../lib/maintenance";
 
-const prisma = new PrismaClient();
-
-function retentionDate(days: number) {
-  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-}
-
-async function main() {
-  const auditRetentionDays = Number(process.env.AUDIT_LOG_RETENTION_DAYS ?? 90);
-  const before = retentionDate(Number.isFinite(auditRetentionDays) ? auditRetentionDays : 90);
-  const deletedAuditLogs = await prisma.auditLog.deleteMany({
-    where: { createdAt: { lt: before } }
-  });
-
-  console.log("[cleanup.logs]", {
-    auditRetentionDays,
-    auditBefore: before.toISOString(),
-    deletedAuditLogs: deletedAuditLogs.count
-  });
-}
-
-main()
+// Manual trigger for the same sweep the app now runs daily (lib/maintenance.ts).
+// Useful for a one-off reclaim after the tables have already grown.
+runRetentionSweep()
+  .then((result) => {
+    console.log("[cleanup.logs]", result);
+    console.log(
+      "[cleanup.logs] note: Postgres does not hand deleted space back to disk until the table is " +
+        'vacuumed. Run VACUUM FULL "AuditLog"; in the SQL editor if you need the space back now.'
+    );
+  })
   .catch((error) => {
     console.error("[cleanup.logs] failed", error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
