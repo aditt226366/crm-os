@@ -109,9 +109,13 @@ function autoSyncState() {
   return globalForLeadSheetAutoSync.leadSheetAutoSyncState;
 }
 
+// 30s rather than the old 5s default: polling Google Sheets 17,280 times a day
+// per tenant burns Sheets API quota and database egress for a lead that is
+// picked up 25 seconds later either way. Set LEAD_SHEET_SYNC_INTERVAL_MS to
+// tune it; 5s is still the floor if you want near-real-time pickup.
 function configuredIntervalMs() {
   const value = Number(process.env.LEAD_SHEET_SYNC_INTERVAL_MS);
-  if (!Number.isFinite(value) || value <= 0) return 5_000;
+  if (!Number.isFinite(value) || value <= 0) return 30_000;
   return Math.min(Math.max(Math.round(value), 5_000), 300_000);
 }
 

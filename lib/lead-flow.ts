@@ -1006,29 +1006,33 @@ export async function runGoogleSheetLeadFlow({
     }
   }
 
-  await safeCreateAuditLog({
-    actorUserId: userId,
-    tenantId,
-    action: "lead.google_sheet_flow_run",
-    entityType: "Lead",
-    newValue: {
-      range: sheetRange,
-      readOnlyMaster: sheetSource.readOnlyMaster,
-      maxRows: maxRows ?? 200,
-      scanned: sheetLeads.length,
-      sent: results.filter((result) => result.status === "sent").length,
-      failed: results.filter((result) => result.status === "failed").length,
-      skipped: results.filter((result) => result.status === "skipped").length,
-      deliveryLimited: results.filter((result) => result.status === "META_DELIVERY_LIMITED").length
-    }
-  });
-
-  return {
+  const countByStatus = (status: string) => results.filter((result) => result.status === status).length;
+  const summary = {
     scanned: sheetLeads.length,
-    sent: results.filter((result) => result.status === "sent").length,
-    failed: results.filter((result) => result.status === "failed").length,
-    skipped: results.filter((result) => result.status === "skipped").length,
-    deliveryLimited: results.filter((result) => result.status === "META_DELIVERY_LIMITED").length,
-    results
+    sent: countByStatus("sent"),
+    failed: countByStatus("failed"),
+    skipped: countByStatus("skipped"),
+    deliveryLimited: countByStatus("META_DELIVERY_LIMITED")
   };
+
+  // This runs on the auto-sync interval, so most invocations scan the sheet and
+  // change nothing. Auditing those no-op passes wrote ~17k rows/day and grew
+  // AuditLog to 233 MB in a month; only record runs that actually did something.
+  const changedSomething = summary.sent > 0 || summary.failed > 0 || summary.deliveryLimited > 0;
+  if (changedSomething) {
+    await safeCreateAuditLog({
+      actorUserId: userId,
+      tenantId,
+      action: "lead.google_sheet_flow_run",
+      entityType: "Lead",
+      newValue: {
+        range: sheetRange,
+        readOnlyMaster: sheetSource.readOnlyMaster,
+        maxRows: maxRows ?? 200,
+        ...summary
+      }
+    });
+  }
+
+  return { ...summary, results };
 }
