@@ -15,18 +15,28 @@ function compactAttachment(attachment: unknown) {
   if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return null;
   const record = attachment as Record<string, unknown>;
   const hasDataUrl = typeof record.dataUrl === "string" && record.dataUrl.length > 0;
+  const whatsappMediaId = typeof record.whatsappMediaId === "string" ? record.whatsappMediaId : undefined;
+  const storedUrl = typeof record.url === "string" && record.url ? record.url : undefined;
+  // Inbound media is never stored inline (it would eat the disk quota), so point
+  // at the streaming route instead — it re-fetches from Meta on demand. Without
+  // this the inbox only ever showed a filename and a "no preview" note.
+  const url = storedUrl ?? (whatsappMediaId ? `/api/app/inbox/media/${encodeURIComponent(whatsappMediaId)}` : undefined);
+
   return {
     id: typeof record.id === "string" ? record.id : undefined,
-    whatsappMediaId: typeof record.whatsappMediaId === "string" ? record.whatsappMediaId : undefined,
+    whatsappMediaId,
     fileName: typeof record.fileName === "string" ? record.fileName : undefined,
     name: typeof record.name === "string" ? record.name : undefined,
     mimeType: typeof record.mimeType === "string" ? record.mimeType : undefined,
     size: typeof record.size === "number" ? record.size : undefined,
-    url: typeof record.url === "string" ? record.url : undefined,
+    url,
     mediaKind: typeof record.mediaKind === "string" ? record.mediaKind : undefined,
     downloadError: typeof record.downloadError === "string" ? record.downloadError : undefined,
-    storageNote:
-      typeof record.storageNote === "string"
+    // Only surface a storage note when there is nothing to show; with a URL
+    // present it just reads as an error next to a working image.
+    storageNote: url
+      ? undefined
+      : typeof record.storageNote === "string"
         ? record.storageNote
         : hasDataUrl
           ? "Inline media preview omitted to reduce egress."
