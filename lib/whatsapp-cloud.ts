@@ -23,11 +23,18 @@ export type WhatsAppTemplateComponentPayload = {
   type: string;
   sub_type?: string;
   index?: string;
-  parameters: Array<{
-    type: "text";
-    text: string;
-    parameter_name?: string;
-  }>;
+  parameters: Array<
+    | {
+        type: "text";
+        text: string;
+        parameter_name?: string;
+      }
+    // Media header parameter, for templates approved with an IMAGE header.
+    | {
+        type: "image";
+        image: { link: string };
+      }
+  >;
 };
 
 export type WhatsAppTemplateLead = {
@@ -324,7 +331,8 @@ export function buildWhatsAppTemplatePayload({
   language,
   variableMode = "NUMBERED",
   variables,
-  lead
+  lead,
+  headerImageUrl
 }: {
   to: string;
   templateName: string;
@@ -332,6 +340,7 @@ export function buildWhatsAppTemplatePayload({
   variableMode?: WhatsAppTemplateVariableMode;
   variables?: Record<string, string>;
   lead?: WhatsAppTemplateLead;
+  headerImageUrl?: string;
 }) {
   const resolvedVariables = resolveWhatsAppTemplateVariables({ variables, lead });
   const entries =
@@ -341,7 +350,17 @@ export function buildWhatsAppTemplatePayload({
     ...(variableMode === "NAMED" ? { parameter_name: key } : {}),
     text
   }));
-  const components = parameters.length ? [{ type: "body", parameters }] : undefined;
+
+  // A template approved with an IMAGE header needs that image on every send —
+  // Meta does not reuse the sample supplied at approval time, and rejects the
+  // message with (#132000) parameter count errors when it is missing.
+  const components: WhatsAppTemplateComponentPayload[] = [];
+  if (headerImageUrl) {
+    components.push({ type: "header", parameters: [{ type: "image", image: { link: headerImageUrl } }] });
+  }
+  if (parameters.length) {
+    components.push({ type: "body", parameters });
+  }
 
   return {
     to: toWhatsAppRecipient(to),
@@ -349,7 +368,7 @@ export function buildWhatsAppTemplatePayload({
     template: {
       name: templateName,
       language: { code: language },
-      ...(components ? { components } : {})
+      ...(components.length ? { components } : {})
     }
   };
 }
@@ -363,7 +382,8 @@ export async function sendWhatsAppTemplateMessage({
   variableMappings,
   lead,
   variables,
-  components
+  components,
+  headerImageUrl
 }: {
   config: IntegrationConfig;
   to: string;
@@ -374,8 +394,9 @@ export async function sendWhatsAppTemplateMessage({
   lead?: WhatsAppTemplateLead;
   variables?: string[];
   components?: WhatsAppTemplateComponentPayload[];
+  headerImageUrl?: string;
 }) {
-  if (variableMappings) {
+  if (variableMappings || headerImageUrl) {
     return postWhatsAppMessage(
       config,
       buildWhatsAppTemplatePayload({
@@ -384,7 +405,8 @@ export async function sendWhatsAppTemplateMessage({
         language,
         variableMode,
         variables: variableMappings,
-        lead
+        lead,
+        headerImageUrl
       })
     );
   }

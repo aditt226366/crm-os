@@ -556,6 +556,7 @@ async function sendEnrollmentStep({
     language: template.language,
     variableMode: template.variableMode,
     variableMappings: template.variables,
+    headerImageUrl: template.headerImageUrl,
     lead
   });
   const metaLimit =

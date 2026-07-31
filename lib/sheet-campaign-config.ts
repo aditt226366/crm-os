@@ -26,6 +26,12 @@ export type SheetCampaignTemplate = {
   delayDays: number;
   variableMode: WhatsAppTemplateVariableMode;
   variables: Record<string, string>;
+  /**
+   * Public https URL of the header image, for templates approved with an
+   * IMAGE header. Meta does not reuse the sample image from approval — the
+   * media has to be supplied on every send, or it rejects the message.
+   */
+  headerImageUrl?: string;
 };
 
 export type SheetCampaign = {
@@ -87,7 +93,18 @@ function parseTemplate(raw: unknown): SheetCampaignTemplate | null {
   const delayDays = Number.isFinite(delayDaysValue) && delayDaysValue >= 0 ? Math.floor(delayDaysValue) : 0;
   const variableMode =
     normalizeTemplateVariableMode(typeof record.variableMode === "string" ? record.variableMode : undefined) ?? "NUMBERED";
-  return { name, language, delayDays, variableMode, variables: parseVariables(record.variables) };
+  const headerImageUrl =
+    typeof record.headerImageUrl === "string" && /^https:\/\/\S+$/i.test(record.headerImageUrl.trim())
+      ? record.headerImageUrl.trim()
+      : undefined;
+  return {
+    name,
+    language,
+    delayDays,
+    variableMode,
+    variables: parseVariables(record.variables),
+    ...(headerImageUrl ? { headerImageUrl } : {})
+  };
 }
 
 /** Parse and validate the stored SHEET_CAMPAIGNS_JSON string. Returns null when absent/empty/invalid. */

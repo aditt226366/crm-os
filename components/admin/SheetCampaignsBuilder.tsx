@@ -19,6 +19,7 @@ type TemplateRow = {
   delayDays: number;
   variableMode: string;
   variables: string;
+  headerImageUrl: string;
 };
 
 type SheetRow = {
@@ -66,7 +67,8 @@ function parseModel(value: string): Model {
               ? JSON.stringify(template.variables)
               : typeof template.variables === "string"
                 ? template.variables
-                : ""
+                : "",
+          headerImageUrl: typeof template.headerImageUrl === "string" ? template.headerImageUrl : ""
         };
       })
     };
@@ -92,7 +94,8 @@ function serializeModel(model: Model): string {
         language: template.language,
         delayDays: template.delayDays,
         variableMode: template.variableMode,
-        variables: template.variables
+        variables: template.variables,
+        headerImageUrl: template.headerImageUrl
       }))
     }))
   });
@@ -283,6 +286,25 @@ export function SheetCampaignsBuilder({
                       placeholder={'{"1":"lead.name"}'}
                       className={inputClass}
                     />
+                    <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                      Must match the approved template exactly. A template with no {"{{1}}"} needs {"{}"} here — sending
+                      an extra value is rejected with &quot;(#132000) Number of parameters does not match&quot;.
+                    </p>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className={labelClass}>Header image URL (only for IMAGE-header templates)</label>
+                    <input
+                      value={template.headerImageUrl}
+                      onChange={(event) =>
+                        updateTemplate(sheetIndex, templateIndex, { headerImageUrl: event.target.value })
+                      }
+                      placeholder="https://example.com/header.jpg"
+                      className={inputClass}
+                    />
+                    <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                      Leave blank unless the approved template has an image header. Meta does not reuse the sample image
+                      from approval, so it must be sent every time. Public https URL.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -302,6 +324,11 @@ function newTemplate(existingCount = 0): TemplateRow {
     language: "en_US",
     delayDays: existingCount === 0 ? 0 : existingCount * 3,
     variableMode: "NUMBERED",
-    variables: '{"1":"lead.name"}'
+    // Empty, not {"1":"lead.name"}: most welcome templates are approved with no
+    // placeholders, and sending a parameter the template does not declare is
+    // rejected outright with (#132000). Add the mapping when the template
+    // actually contains {{1}}.
+    variables: "{}",
+    headerImageUrl: ""
   };
 }
