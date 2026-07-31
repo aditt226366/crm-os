@@ -308,7 +308,20 @@ const requiredColumns: Record<string, string[]> = {
     "createdAt",
     "updatedAt"
   ],
-  KnowledgeChunk: ["id", "tenantId", "documentId", "content", "embedding", "metadata", "createdAt"]
+  KnowledgeChunk: ["id", "tenantId", "documentId", "content", "embedding", "metadata", "createdAt"],
+  // A table is only created if it is listed here: needsRepair() iterates these
+  // keys, so a CREATE TABLE statement alone never runs.
+  MessageMedia: [
+    "id",
+    "tenantId",
+    "messageId",
+    "whatsappMediaId",
+    "fileName",
+    "mimeType",
+    "size",
+    "data",
+    "createdAt"
+  ]
 };
 
 const expectedEnumColumns: Record<string, Record<string, string>> = {

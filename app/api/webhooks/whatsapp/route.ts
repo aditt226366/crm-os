@@ -13,6 +13,7 @@ import {
   updateGoogleSheetLeadStatuses
 } from "@/lib/google-sheets-leads";
 import { handleAiAgentInboundReply } from "@/lib/ai-agent";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { downloadWhatsAppMedia, messageTypeFromMime } from "@/lib/whatsapp-cloud";
 import {
   stopActiveSourceCampaignsForContact,
@@ -236,6 +237,7 @@ async function storeInboundMedia({
   bytes: Buffer;
 }) {
   try {
+    await ensureLeadWorkspaceSchema();
     await prisma.messageMedia.upsert({
       where: { tenantId_whatsappMediaId: { tenantId, whatsappMediaId } },
       create: {

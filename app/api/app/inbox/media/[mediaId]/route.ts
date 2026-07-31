@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ApiError, errorResponse } from "@/lib/api";
 import { requireFeature } from "@/lib/guards";
+import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 import { readEncryptedConfig } from "@/lib/integration-vault";
 import { downloadWhatsAppMedia } from "@/lib/whatsapp-cloud";
 
@@ -24,6 +25,10 @@ export async function GET(request: NextRequest, context: Context) {
     if (!mediaId?.trim()) {
       throw new ApiError(400, "MEDIA_ID_REQUIRED", "Media id is required.");
     }
+
+    // MessageMedia is created by the runtime bootstrap, not a migration, so it
+    // may not exist yet on a database that predates this feature.
+    await ensureLeadWorkspaceSchema();
 
     // Stored copy first — this is scoped to the tenant by the unique key, so it
     // doubles as the ownership check.
