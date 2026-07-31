@@ -1213,7 +1213,22 @@ const tableRepairStatements = [
   `ALTER TABLE public."KnowledgeChunk" ADD COLUMN IF NOT EXISTS "metadata" JSONB;`,
   `ALTER TABLE public."KnowledgeChunk" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
   `UPDATE public."KnowledgeChunk" SET "createdAt" = NOW() WHERE "createdAt" IS NULL;`,
-  `CREATE INDEX IF NOT EXISTS "KnowledgeChunk_tenantId_documentId_idx" ON public."KnowledgeChunk"("tenantId", "documentId");`
+  `CREATE INDEX IF NOT EXISTS "KnowledgeChunk_tenantId_documentId_idx" ON public."KnowledgeChunk"("tenantId", "documentId");`,
+  `CREATE TABLE IF NOT EXISTS public."MessageMedia" (
+  "id" TEXT PRIMARY KEY,
+  "tenantId" TEXT NOT NULL,
+  "messageId" TEXT NOT NULL,
+  "whatsappMediaId" TEXT NOT NULL,
+  "fileName" TEXT,
+  "mimeType" TEXT NOT NULL,
+  "size" INTEGER NOT NULL,
+  "data" BYTEA NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`,
+  `ALTER TABLE public."MessageMedia" ADD COLUMN IF NOT EXISTS "fileName" TEXT;`,
+  `ALTER TABLE public."MessageMedia" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "MessageMedia_tenantId_whatsappMediaId_key" ON public."MessageMedia"("tenantId", "whatsappMediaId");`,
+  `CREATE INDEX IF NOT EXISTS "MessageMedia_messageId_idx" ON public."MessageMedia"("messageId");`
 ];
 
 const repairStatements = [...enumRepairStatements, ...tableRepairStatements];

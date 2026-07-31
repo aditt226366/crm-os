@@ -175,6 +175,11 @@ async function inboundMediaMetadata({
     sha256: media.sha256 ?? null
   };
 
+  // Bytes are returned to the caller rather than embedded here: they are written
+  // to MessageMedia once the message row exists, so the inbox never drags them
+  // out of the database while listing a conversation.
+  let bytes: Buffer | null = null;
+
   if (media.id) {
     try {
       const config = await whatsappConfigForTenant(tenantId);
@@ -183,10 +188,12 @@ async function inboundMediaMetadata({
         attachment.mimeType = downloaded.mimeType;
         attachment.size = downloaded.size;
         attachment.sha256 = downloaded.sha256 ?? attachment.sha256;
-        attachment.storageNote =
-          downloaded.bytes.byteLength > MAX_DATABASE_MEDIA_BYTES
-            ? "Media is larger than the database preview limit."
-            : "Media metadata stored without inline base64 preview to reduce egress.";
+        if (downloaded.bytes.byteLength > MAX_DATABASE_MEDIA_BYTES) {
+          attachment.storageNote =
+            "Media is larger than the database limit; it stays viewable only while Meta retains it (about 30 days).";
+        } else {
+          bytes = downloaded.bytes;
+        }
       }
     } catch (error) {
       attachment.downloadError = error instanceof Error ? error.message : "Unable to download WhatsApp media.";
@@ -194,14 +201,61 @@ async function inboundMediaMetadata({
   }
 
   return {
-    attachments: [attachment],
-    whatsappMedia: {
-      id: media.id,
-      kind,
-      mimeType,
-      sha256: media.sha256 ?? null
+    bytes,
+    fileName,
+    metadata: {
+      attachments: [attachment],
+      whatsappMedia: {
+        id: media.id,
+        kind,
+        mimeType,
+        sha256: media.sha256 ?? null
+      }
     }
   };
+}
+
+/**
+ * Persist inbound media so it outlives Meta's ~30 day retention. Never throws:
+ * a storage failure must not cost us the message itself, and the media route
+ * still falls back to fetching from Meta while the file is young.
+ */
+async function storeInboundMedia({
+  tenantId,
+  messageId,
+  whatsappMediaId,
+  fileName,
+  mimeType,
+  bytes
+}: {
+  tenantId: string;
+  messageId: string;
+  whatsappMediaId: string;
+  fileName: string;
+  mimeType: string;
+  bytes: Buffer;
+}) {
+  try {
+    await prisma.messageMedia.upsert({
+      where: { tenantId_whatsappMediaId: { tenantId, whatsappMediaId } },
+      create: {
+        tenantId,
+        messageId,
+        whatsappMediaId,
+        fileName,
+        mimeType,
+        size: bytes.byteLength,
+        // Prisma's Bytes maps to Uint8Array; Buffer is not directly assignable.
+        data: new Uint8Array(bytes)
+      },
+      update: {}
+    });
+  } catch (error) {
+    console.error(
+      "[whatsapp.webhook] storing inbound media failed",
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 }
 
 function statusFailureReason(status: MetaStatus) {
@@ -557,10 +611,21 @@ export async function POST(request: NextRequest) {
             body,
             messageId: message.id,
             type: media?.messageType ?? "TEXT",
-            metadata: mediaMetadata,
+            metadata: mediaMetadata?.metadata,
             source: message.referral ? "AD" : "ORGANIC",
             sourceId: message.referral?.source_id
           });
+
+          if (mediaMetadata?.bytes && media?.media.id && !result.duplicate) {
+            await storeInboundMedia({
+              tenantId,
+              messageId: result.message.id,
+              whatsappMediaId: media.media.id,
+              fileName: mediaMetadata.fileName,
+              mimeType: media.mimeType,
+              bytes: mediaMetadata.bytes
+            });
+          }
           const campaignStop = result.duplicate
             ? { stopped: 0 }
             : await stopActiveSourceCampaignsForContact({

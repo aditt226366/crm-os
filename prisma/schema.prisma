@@ -288,6 +288,7 @@ model Tenant {
   workflowRunSteps            WorkflowRunStep[]
   knowledgeDocuments          KnowledgeDocument[]
   knowledgeChunks             KnowledgeChunk[]
+  messageMedia                MessageMedia[]
   whatsAppTemplates           WhatsAppTemplate[]
 }
 
@@ -479,6 +480,7 @@ model Message {
   updatedAt           DateTime             @updatedAt
   broadcastRecipients BroadcastRecipient[]
   campaignRecipients  CampaignRecipient[]
+  media               MessageMedia[]
 
   @@unique([tenantId, whatsappMessageId])
   @@index([tenantId, conversationId, createdAt])
@@ -833,6 +835,29 @@ model KnowledgeChunk {
   createdAt  DateTime          @default(now())
 
   @@index([tenantId, documentId])
+}
+
+/// Inbound WhatsApp media kept permanently, because Meta drops it after ~30 days.
+/// Deliberately its own table rather than a field on Message: the inbox selects
+/// Message.metadata on every conversation load, so bytes stored there would be
+/// pulled out of the database each time a thread is opened. Here they are read
+/// only when somebody actually views the attachment.
+model MessageMedia {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messageId       String
+  message         Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  whatsappMediaId String
+  fileName        String?
+  mimeType        String
+  size            Int
+  /// bytea, not base64 in JSON — base64 would add ~33% to every file.
+  data            Bytes
+  createdAt       DateTime @default(now())
+
+  @@unique([tenantId, whatsappMediaId])
+  @@index([messageId])
 }
 
 model WhatsAppTemplate {
