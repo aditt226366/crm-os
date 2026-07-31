@@ -178,6 +178,16 @@ function inferPhone(row: string[], phoneIndex: number | null, defaultCountryCode
     if (phone) return phone;
   }
 
+  // Only guess from arbitrary cells when the sheet has no phone column at all —
+  // that is the headerless case this fallback exists for. When a phone column
+  // IS present and holds nothing usable, the row genuinely has no phone.
+  //
+  // Scanning regardless is dangerous on a Meta Lead Ads export: form_id,
+  // ad_id, adset_id and campaign_id are all 8-15 digit numbers, so a test lead
+  // whose phone_number reads "<test lead: dummy data>" yielded +250632449983
+  // from its form_id — a real, unrelated number that would then be messaged.
+  if (phoneIndex !== null) return null;
+
   for (const value of row) {
     const phone = phoneFromValue(String(value), defaultCountryCode);
     if (phone) return phone;
