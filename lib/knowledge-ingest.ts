@@ -8,9 +8,16 @@ import { ensureLeadWorkspaceSchema } from "@/lib/lead-workspace-schema";
 //   - website: fetch + strip HTML
 //   - PDF: Claude reads the document natively (uses the tenant's Anthropic key)
 
-const MAX_KB_CHARS = 40_000;
+// A real knowledge base is a long document. The old 40k/40-chunk ceiling held
+// roughly 12 pages, so anything larger was silently cut off — the agent would
+// answer confidently from the first third and know nothing about the rest.
+const MAX_KB_CHARS = 200_000;
 const CHUNK_SIZE = 1_200;
-const MAX_CHUNKS = 40;
+const MAX_CHUNKS = 200;
+// Output cap for extraction. 8k tokens is about a third of a 23-page document,
+// and the truncation was invisible.
+const EXTRACTION_MAX_TOKENS = 32_000;
+const EXTRACTION_TIMEOUT_MS = 240_000;
 
 export function stripHtml(html: string) {
   return html
@@ -37,6 +44,18 @@ export async function fetchWebsiteText(url: string): Promise<string | null> {
   }
 }
 
+export type PdfExtractionResult =
+  | { ok: true; text: string; truncated: boolean }
+  | { ok: false; reason: string };
+
+/**
+ * Reads a PDF via Claude's native document support.
+ *
+ * Returns a reason on failure rather than null. The previous version collapsed
+ * an API error, a timeout and an empty response into the same `null`, which
+ * surfaced to the admin as a bare "Could not extract text from that PDF" with
+ * nothing to act on.
+ */
 export async function extractPdfText({
   base64,
   apiKey,
@@ -45,9 +64,9 @@ export async function extractPdfText({
   base64: string;
   apiKey: string;
   model: string;
-}): Promise<string | null> {
+}): Promise<PdfExtractionResult> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const timeout = setTimeout(() => controller.abort(), EXTRACTION_TIMEOUT_MS);
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -58,7 +77,7 @@ export async function extractPdfText({
       },
       body: JSON.stringify({
         model,
-        max_tokens: 8000,
+        max_tokens: EXTRACTION_MAX_TOKENS,
         messages: [
           {
             role: "user",
@@ -66,7 +85,7 @@ export async function extractPdfText({
               { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
               {
                 type: "text",
-                text: "Extract all readable text from this document as plain text. Output only the extracted text, no commentary."
+                text: "Extract all readable text from this document as plain text, preserving headings, tables as readable lines, and ordering. Output only the extracted text, no commentary."
               }
             ]
           }
@@ -74,12 +93,38 @@ export async function extractPdfText({
       }),
       signal: controller.signal
     });
-    if (!response.ok) return null;
-    const data = (await response.json().catch(() => null)) as { content?: Array<{ text?: string }> } | null;
+
+    const data = (await response.json().catch(() => null)) as {
+      content?: Array<{ text?: string }>;
+      stop_reason?: string;
+      error?: { message?: string; type?: string };
+    } | null;
+
+    if (!response.ok) {
+      const detail = data?.error?.message ?? data?.error?.type ?? "no detail returned";
+      return { ok: false, reason: `Claude rejected the document (HTTP ${response.status}): ${detail}` };
+    }
+
     const text = data?.content?.find((block) => block.text)?.text?.trim();
-    return text ? text.slice(0, MAX_KB_CHARS) : null;
-  } catch {
-    return null;
+    if (!text) {
+      return { ok: false, reason: "Claude returned no text for this PDF — it may be an image-only scan." };
+    }
+
+    return {
+      ok: true,
+      text: text.slice(0, MAX_KB_CHARS),
+      // Either the model hit its output cap or we clipped it; both mean the
+      // tail of the document is missing and the admin should know.
+      truncated: data?.stop_reason === "max_tokens" || text.length > MAX_KB_CHARS
+    };
+  } catch (error) {
+    const aborted = error instanceof Error && error.name === "AbortError";
+    return {
+      ok: false,
+      reason: aborted
+        ? `Extraction timed out after ${Math.round(EXTRACTION_TIMEOUT_MS / 1000)}s — the PDF is large. Split it into smaller files and upload them one at a time.`
+        : `Extraction failed: ${error instanceof Error ? error.message : String(error)}`
+    };
   } finally {
     clearTimeout(timeout);
   }

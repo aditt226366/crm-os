@@ -49,7 +49,7 @@ export async function POST(request: NextRequest, context: Context) {
     }
     const url = typeof form.get("url") === "string" ? (form.get("url") as string).trim() : "";
     const file = form.get("file");
-    const indexed: Array<{ title: string; type: string; chunkCount: number }> = [];
+    const indexed: Array<{ title: string; type: string; chunkCount: number; truncated?: boolean }> = [];
 
     if (url) {
       if (!/^https?:\/\/\S+$/i.test(url)) {
@@ -88,21 +88,29 @@ export async function POST(request: NextRequest, context: Context) {
         );
       }
       const base64 = Buffer.from(await blob.arrayBuffer()).toString("base64");
-      const text = await extractPdfText({ base64, apiKey: credentials.apiKey, model: credentials.model });
-      if (!text) {
-        throw new ApiError(400, "PDF_UNREADABLE", "Could not extract text from that PDF.");
+      const extraction = await extractPdfText({ base64, apiKey: credentials.apiKey, model: credentials.model });
+      if (!extraction.ok) {
+        // Report why. A bare "could not extract" leaves the admin with nothing
+        // to act on, and the causes need different fixes (split the file, fix
+        // the API key, re-scan an image-only PDF).
+        throw new ApiError(400, "PDF_UNREADABLE", extraction.reason);
       }
       const title = blob.name || "document.pdf";
       const stored = await storeKnowledgeDocument({
         tenantId,
         title,
         type: "PDF",
-        text,
+        text: extraction.text,
         createdById: admin.id,
         source: "admin-console",
         replaceExisting: true
       });
-      indexed.push({ title, type: "PDF", chunkCount: stored.chunkCount });
+      indexed.push({
+        title,
+        type: "PDF",
+        chunkCount: stored.chunkCount,
+        ...(extraction.truncated ? { truncated: true } : {})
+      });
     }
 
     if (!indexed.length) {
@@ -120,12 +128,15 @@ export async function POST(request: NextRequest, context: Context) {
     });
 
     const totalChunks = indexed.reduce((total, entry) => total + entry.chunkCount, 0);
+    const truncated = indexed.filter((entry) => entry.truncated).map((entry) => entry.title);
     return json({
       ok: true,
       indexed,
-      message: `Indexed ${totalChunks} section${totalChunks === 1 ? "" : "s"} from ${indexed
-        .map((entry) => entry.title)
-        .join(", ")}`
+      message:
+        `Indexed ${totalChunks} section${totalChunks === 1 ? "" : "s"} from ${indexed.map((entry) => entry.title).join(", ")}` +
+        (truncated.length
+          ? `. Warning: ${truncated.join(", ")} was too long to read in full — the end of the document is missing. Split it and upload the parts separately.`
+          : "")
     });
   } catch (error) {
     return errorResponse(error);
